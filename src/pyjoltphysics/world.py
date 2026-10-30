@@ -424,6 +424,7 @@ class World:
                 np.ascontiguousarray(shape.points),
                 np.ascontiguousarray(shape.triangles),
                 None if shape.materials is None else np.ascontiguousarray(shape.materials),
+                None if shape.ids is None else np.ascontiguousarray(shape.ids),
             )
         if shape.kind == ShapeKind.HEIGHTFIELD:
             assert shape.heights is not None
@@ -975,6 +976,15 @@ class World:
         if bits & ~int(BodyFlag.REPORT | BodyFlag.NO_SLEEP | BodyFlag.FILTER_CONTACTS):
             raise ValueError('only REPORT, NO_SLEEP and FILTER_CONTACTS change after a body is added')
         return self._native.set_flags(_uids(uids), bits, bool(on), at_tick)
+
+    def triangle_of(self, uid: int, sub_shape: int) -> int:
+        """The number of the mesh triangle a query's ``sub_shape`` names on body ``uid``; -1 for another part.
+
+        The number is the triangle's row in the mesh's ``triangles``, or the
+        ``ids`` the mesh was given; a compound or decorated body's mesh child
+        answers the same.
+        """
+        return int(self._native.triangle_of(int(uid), int(sub_shape)))
 
     def flush(self) -> None:
         """Apply the batches due at the current tick now, on the calling thread, without stepping.

@@ -185,7 +185,7 @@ class World:
     def add_convex(self, points: Annotated[NDArray[numpy.float64], dict(shape=(None, 3), order='C', device='cpu', writable=False)], max_convex_radius: float, hull_tolerance: float) -> int:
         """Build and register a convex hull; return its shape id."""
 
-    def add_mesh(self, points: Annotated[NDArray[numpy.float64], dict(shape=(None, 3), order='C', device='cpu', writable=False)], triangles: Annotated[NDArray[numpy.uint32], dict(shape=(None, 3), order='C', device='cpu', writable=False)], materials: Annotated[NDArray[numpy.uint16], dict(shape=(None,), order='C', device='cpu', writable=False)] | None = None) -> int:
+    def add_mesh(self, points: Annotated[NDArray[numpy.float64], dict(shape=(None, 3), order='C', device='cpu', writable=False)], triangles: Annotated[NDArray[numpy.uint32], dict(shape=(None, 3), order='C', device='cpu', writable=False)], materials: Annotated[NDArray[numpy.uint16], dict(shape=(None,), order='C', device='cpu', writable=False)] | None = None, ids: Annotated[NDArray[numpy.uint32], dict(shape=(None,), order='C', device='cpu', writable=False)] | None = None) -> int:
         """Build and register a triangle mesh; return its shape id."""
 
     def add_heightfield(self, heights: Annotated[NDArray[numpy.float32], dict(shape=(None, None), order='C', device='cpu', writable=False)], origin: Sequence[float], spacing: Sequence[float], block_size: int, bits_per_sample: int, min_height: float, max_height: float) -> int:
@@ -246,6 +246,11 @@ class World:
     def set_motion(self, uids: Annotated[NDArray[numpy.uint32], dict(shape=(None,), order='C', device='cpu', writable=False)], mass: Annotated[NDArray[numpy.float32], dict(shape=(None,), order='C', device='cpu', writable=False)], linear_damping: Annotated[NDArray[numpy.float32], dict(shape=(None,), order='C', device='cpu', writable=False)], angular_damping: Annotated[NDArray[numpy.float32], dict(shape=(None,), order='C', device='cpu', writable=False)], gravity_factor: Annotated[NDArray[numpy.float32], dict(shape=(None,), order='C', device='cpu', writable=False)], at_tick: int = 0) -> int: ...
 
     def set_flags(self, uids: Annotated[NDArray[numpy.uint32], dict(shape=(None,), order='C', device='cpu', writable=False)], bits: int, on: bool, at_tick: int = 0) -> int: ...
+
+    def triangle_of(self, uid: int, sub_shape: int) -> int:
+        """
+        The number of the mesh triangle sub_shape names on body uid, or -1 for a part that is no mesh triangle.
+        """
 
     def flush(self) -> None: ...
 

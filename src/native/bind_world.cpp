@@ -328,17 +328,21 @@ ShapeId add_convex(World &world, const In<double, nb::shape<-1, 3>> &points,
 }
 
 ShapeId add_mesh(World &world, const In<double, nb::shape<-1, 3>> &points,
-                 const In<uint32_t, nb::shape<-1, 3>> &triangles, std::optional<Shorts> materials) {
+                 const In<uint32_t, nb::shape<-1, 3>> &triangles, std::optional<Shorts> materials,
+                 std::optional<Uids> ids) {
     std::vector<double> vertices(points.data(), points.data() + points.size());
     std::vector<uint32_t> indices(triangles.data(), triangles.data() + triangles.size());
     std::vector<uint16_t> palette;
     if (materials)
         palette = copy<uint16_t>(*materials, triangles.shape(0), "materials");
+    std::vector<uint32_t> numbers;
+    if (ids)
+        numbers = copy<uint32_t>(*ids, triangles.shape(0), "ids");
     JPH::RefConst<JPH::Shape> shape;
     {
         nb::gil_scoped_release release;
         shape = make_mesh(vertices.data(), points.shape(0), indices.data(), triangles.shape(0),
-                          palette.empty() ? nullptr : palette.data());
+                          palette.empty() ? nullptr : palette.data(), numbers.empty() ? nullptr : numbers.data());
     }
     return world.core().shapes().add(std::move(shape), ShapeKind::Mesh);
 }
@@ -1181,6 +1185,7 @@ void bind_world(nb::module_ &m) {
         .def("add_convex", &add_convex, nb::arg("points"), nb::arg("max_convex_radius"),
              nb::arg("hull_tolerance"), "Build and register a convex hull; return its shape id.")
         .def("add_mesh", &add_mesh, nb::arg("points"), nb::arg("triangles"), nb::arg("materials").none() = nb::none(),
+             nb::arg("ids").none() = nb::none(),
              "Build and register a triangle mesh; return its shape id.")
         .def("add_heightfield", &add_heightfield, nb::arg("heights"), nb::arg("origin"),
              nb::arg("spacing"), nb::arg("block_size"), nb::arg("bits_per_sample"),
@@ -1370,6 +1375,14 @@ void bind_world(nb::module_ &m) {
                 return w.core().submit(Command(std::move(set)), at_tick);
             },
             nb::arg("uids"), nb::arg("bits"), nb::arg("on"), nb::arg("at_tick") = 0)
+        .def(
+            "triangle_of",
+            [](World &w, uint32_t uid, uint32_t sub_shape) {
+                nb::gil_scoped_release release;
+                return w.core().triangle_of(uid, sub_shape);
+            },
+            nb::arg("uid"), nb::arg("sub_shape"),
+            "The number of the mesh triangle sub_shape names on body uid, or -1 for a part that is no mesh triangle.")
         .def(
             "flush",
             [](World &w) {

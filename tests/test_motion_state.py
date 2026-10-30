@@ -5,7 +5,7 @@ from __future__ import annotations
 import numpy as np
 import pytest
 
-from pyjoltphysics import BodyBatch, BodyFlag, EventKind, EventPhase, MotionType, World
+from pyjoltphysics import BodyBatch, BodyFlag, EventKind, EventPhase, MotionType, Shape, World
 from pyjoltphysics.testing import MakeWorld, floor, latest
 
 
@@ -229,3 +229,29 @@ def test_flush_beside_a_free_running_world(make_world: MakeWorld) -> None:
         hit = world.raycast((x * 10.0 + 100.0, 5.0, 0.0), (0.0, -1.0, 0.0))
         assert hit is not None and hit.uid == post
     world.stop()
+
+
+def test_a_ray_reports_the_mesh_triangle_it_meets(make_world: MakeWorld) -> None:
+    world = make_world(tick_hz=60.0, threads=1)
+    points = np.array([(0, 0, 0), (1, 0, 0), (1, 0, 1), (0, 0, 1), (2, 0, 0), (2, 0, 1)], dtype='d')
+    triangles = np.array([(0, 2, 1), (0, 3, 2), (1, 5, 4), (1, 2, 5)])
+    world.add_bodies(BodyBatch.meshes([(0.0, 0.0, 0.0)], points, triangles))
+    compound = Shape.compound([(Shape.mesh(points, triangles, ids=[10, 11, 12, 13]), (5.0, 0.0, 0.0))])
+    (other,), _ = world.add_bodies(BodyBatch.of_shape([(0.0, 0.0, 0.0)], compound,
+                                                      motion=MotionType.STATIC))
+    (ball,), _ = world.add_bodies(BodyBatch.spheres([(0.0, 0.0, 9.0)], radius=0.5,
+                                                    motion=MotionType.STATIC))
+    assert ball != other
+    world.run_ticks(1)
+    found = []
+    for x, z in ((0.8, 0.2), (0.2, 0.8), (1.8, 0.2), (1.2, 0.8)):
+        hit = world.raycast((x, 1.0, z), (0.0, -1.0, 0.0))
+        assert hit is not None
+        found.append(world.triangle_of(hit.uid, hit.sub_shape))
+    assert found == [0, 1, 2, 3]
+    hit = world.raycast((5.8, 1.0, 0.2), (0.0, -1.0, 0.0))
+    assert hit is not None and hit.uid == other
+    assert world.triangle_of(hit.uid, hit.sub_shape) == 10
+    hit = world.raycast((0.0, 1.0, 9.0), (0.0, -1.0, 0.0))
+    assert hit is not None and world.triangle_of(hit.uid, hit.sub_shape) == -1
+    assert world.triangle_of(9999, 0) == -1

@@ -237,7 +237,7 @@ bodies made with it keep the shape. `shape_info(id)` returns a `ShapeInfo`:
 |---|---|
 | `Shape.box(size)`, `sphere(radius)`, `capsule(radius, height)`, `cylinder(radius, height)` | a primitive, as a shape a compound or `of_shape` can name |
 | `Shape.convex(points, max_convex_radius=0.05, hull_tolerance=1e-3)` | Jolt's `ConvexHullShape` of (m, 3) points: edges rounded by up to `max_convex_radius` (less for a small hull), points allowed `hull_tolerance` m outside. Fewer than 4 points, or points on a plane, a line or one point, raise `ValueError` |
-| `Shape.mesh(points, triangles)` | Jolt's `MeshShape` of (m, 3) vertices and (t, 3) indices. Degenerate and repeated triangles are dropped; an index past the vertices raises `ValueError`. Edges between faces meeting at under 5 degrees are inactive (Jolt's active edges). A triangle collides on its front face, from which its vertices run anticlockwise; a wall met from both sides lists each triangle in both windings |
+| `Shape.mesh(points, triangles, materials=None, ids=None)` | Jolt's `MeshShape` of (m, 3) vertices and (t, 3) indices. Degenerate and repeated triangles are dropped; an index past the vertices raises `ValueError`. Edges between faces meeting at under 5 degrees are inactive (Jolt's active edges). A triangle collides on its front face, from which its vertices run anticlockwise; a wall met from both sides lists each triangle in both windings |
 | `Shape.heightfield(heights, origin, spacing, holes=None, block_size=4, bits_per_sample=8, height_range=None)` | Jolt's `HeightFieldShape`, below |
 | `Shape.compound(parts, mutable=False)` | Jolt's `StaticCompoundShape`, or with `mutable` its `MutableCompoundShape` (quicker to build, slower to collide). Each part is `(shape, position)` or `(shape, position, orientation)`, the shape a `Shape` or an id |
 
@@ -436,6 +436,7 @@ lock: the tick already holds the shared side.
 | `sweep(shape, start, end, orientation=(0, 0, 0, 1), filter=None, all_hits=False)` | the first `ShapeHit(uid, fraction, distance, point, normal, depth, sub_shape)` along the way, or None; with `all_hits` a list of every body's first hit, in order |
 | `sweep_sphere(radius, start, end, ...)`, `sweep_capsule(radius, height, start, end, ...)`, `sweep_box(size, start, end, ...)` | `sweep` with that primitive; a capsule's `height` is between its hemisphere centres |
 | `overlap(shape, position, orientation=(0, 0, 0, 1), filter=None)` | (k,) uint32 ascending uids of the bodies the shape touches |
+| `triangle_of(uid, sub_shape)` | the number of the mesh triangle a hit's `sub_shape` names on body `uid` (its row in the mesh's `triangles`, or the `ids` `Shape.mesh` was given), through compounds and decorations; -1 for any other part |
 
 `shape` is a `Shape` (a primitive, or any kind `add_shape` builds) or a shape
 id; a plane is neither swept nor overlapped. A ray's `point` and `normal` are

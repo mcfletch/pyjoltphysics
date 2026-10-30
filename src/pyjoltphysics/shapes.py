@@ -66,6 +66,8 @@ class Shape:
     triangles: np.ndarray | None = None
     #: A mesh's (t,) uint16 material index of each triangle; 0 takes the body's.
     materials: np.ndarray | None = None
+    #: A mesh's (t,) uint32 number of each triangle, which queries report; by default its index.
+    ids: np.ndarray | None = None
     heights: np.ndarray | None = None
     origin: tuple[float, float, float] = (0.0, 0.0, 0.0)
     spacing: tuple[float, float] = (1.0, 1.0)
@@ -122,7 +124,11 @@ class Shape:
 
     @classmethod
     def mesh(
-        cls, points: npt.ArrayLike, triangles: npt.ArrayLike, materials: npt.ArrayLike | None = None
+        cls,
+        points: npt.ArrayLike,
+        triangles: npt.ArrayLike,
+        materials: npt.ArrayLike | None = None,
+        ids: npt.ArrayLike | None = None,
     ) -> Shape:
         """Return a triangle mesh: (m, 3) vertices in the body's frame and (t, 3) vertex indices.
 
@@ -136,6 +142,10 @@ class Shape:
         edges). A triangle collides on its front face, the side from which its
         vertices run anticlockwise; a wall met from both sides lists each
         triangle in both windings.
+
+        ``ids`` numbers each triangle (by default its row in ``triangles``);
+        :meth:`World.triangle_of <pyjoltphysics.World.triangle_of>` turns a
+        query's ``sub_shape`` into that number.
         """
         tris = np.array(triangles, dtype=np.int64, copy=True)
         if tris.ndim != 2 or tris.shape[1] != 3:
@@ -152,11 +162,18 @@ class Shape:
                     'materials has %d entries for %d triangles' % (len(palette), len(indices))
                 )
             palette.flags.writeable = False
+        numbers = None
+        if ids is not None:
+            numbers = np.array(ids, dtype=np.uint32, copy=True).reshape(-1)
+            if len(numbers) != len(indices):
+                raise ValueError('ids has %d entries for %d triangles' % (len(numbers), len(indices)))
+            numbers.flags.writeable = False
         return cls(
             ShapeKind.MESH,
             points=_float_rows(points, 3, 'points'),
             triangles=indices,
             materials=palette,
+            ids=numbers,
         )
 
     @classmethod

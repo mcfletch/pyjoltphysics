@@ -93,7 +93,8 @@ JPH::RefConst<JPH::Shape> make_convex(const double *points, size_t count, float 
 // A triangle mesh from `count` vertices and `triangles` index triples.
 // Degenerate and repeated triangles are dropped; active-edge detection is on.
 JPH::RefConst<JPH::Shape> make_mesh(const double *points, size_t count, const uint32_t *indices,
-                                    size_t triangles, const uint16_t *materials = nullptr);
+                                    size_t triangles, const uint16_t *materials = nullptr,
+                                    const uint32_t *ids = nullptr);
 
 struct HeightFieldSpec {
     const float *heights = nullptr;  // rows * columns, row major; NaN is a hole

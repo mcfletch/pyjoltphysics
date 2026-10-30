@@ -2,6 +2,8 @@
 
 #include "world.h"
 
+#include <Jolt/Physics/Collision/Shape/MeshShape.h>
+
 #include <Jolt/Physics/Body/BodyLock.h>
 #include <Jolt/Physics/Collision/CastResult.h>
 #include <Jolt/Physics/Collision/CollideShape.h>
@@ -184,6 +186,24 @@ std::vector<Uid> WorldCore::overlap(const JPH::Shape &shape, const double positi
     std::sort(out.begin(), out.end());
     out.erase(std::unique(out.begin(), out.end()), out.end());
     return out;
+}
+
+int64_t WorldCore::triangle_of(Uid uid, uint32_t sub_shape) {
+    check();
+    QueryLock lock(*this);
+    const Row *row = find(uid);
+    if (row == nullptr)
+        return -1;
+    const JPH::Body *body = system_.GetBodyLockInterfaceNoLock().TryGetBody(row->id);
+    if (body == nullptr)
+        return -1;
+    JPH::SubShapeID id;
+    id.SetValue(sub_shape);
+    JPH::SubShapeID remainder;
+    const JPH::Shape *leaf = body->GetShape()->GetLeafShape(id, remainder);
+    if (leaf == nullptr || leaf->GetSubType() != JPH::EShapeSubType::Mesh)
+        return -1;
+    return int64_t(static_cast<const JPH::MeshShape *>(leaf)->GetTriangleUserData(remainder));
 }
 
 }  // namespace pj

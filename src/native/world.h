@@ -188,6 +188,8 @@ public:
                  const QueryFilter &filter, RayResults &out);
     std::vector<ShapeHit> cast_shape(const JPH::Shape &shape, const double start[3], const double rotation[4],
                                      const double end[3], bool all_hits, const QueryFilter &filter);
+    // The number a mesh triangle was given, for a query's sub-shape on body uid; -1 for other parts.
+    int64_t triangle_of(Uid uid, uint32_t sub_shape);
     std::vector<Uid> overlap(const JPH::Shape &shape, const double position[3], const double rotation[4],
                              const QueryFilter &filter);
 

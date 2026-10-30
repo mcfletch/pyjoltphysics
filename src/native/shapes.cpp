@@ -167,7 +167,7 @@ JPH::RefConst<JPH::Shape> make_convex(const double *points, size_t count, float 
 }
 
 JPH::RefConst<JPH::Shape> make_mesh(const double *points, size_t count, const uint32_t *indices,
-                                    size_t triangles, const uint16_t *materials) {
+                                    size_t triangles, const uint16_t *materials, const uint32_t *ids) {
     if (triangles == 0)
         throw std::invalid_argument("a mesh needs at least one triangle");
     JPH::VertexList vertices;
@@ -194,10 +194,13 @@ JPH::RefConst<JPH::Shape> make_mesh(const double *points, size_t count, const ui
                 throw std::invalid_argument("triangle " + std::to_string(t) + " names vertex " +
                                             std::to_string(tri[k]) + " of " +
                                             std::to_string(count));
-        list.push_back(JPH::IndexedTriangle(tri[0], tri[1], tri[2], materials ? slot_of[materials[t]] : 0));
+        list.push_back(JPH::IndexedTriangle(tri[0], tri[1], tri[2], materials ? slot_of[materials[t]] : 0,
+                                            ids ? ids[t] : uint32_t(t)));
     }
     // The constructor drops degenerate and repeated triangles.
     JPH::MeshShapeSettings settings(std::move(vertices), std::move(list), std::move(palette));
+    // Each triangle keeps its number, which a query reports for the triangle it meets.
+    settings.mPerTriangleUserData = true;
     if (settings.mIndexedTriangles.empty())
         throw std::invalid_argument("every triangle of the mesh is degenerate");
     return created(settings.Create(), "mesh");
