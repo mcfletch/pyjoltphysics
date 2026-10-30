@@ -17,6 +17,8 @@ from pyjoltphysics import BodyBatch, World, WorldSettings
 omi = pytest.importorskip('omi_physics.world', reason='omi_physics is the reference engine')
 model = pytest.importorskip('omi_physics.model')
 
+pytestmark = pytest.mark.differential
+
 DT = 1.0 / 120.0
 FRICTION = 0.6
 

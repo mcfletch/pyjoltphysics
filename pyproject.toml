@@ -96,6 +96,11 @@ input = "src/pyjoltphysics/__init__.py"
 # package is also installed non-editably.
 testpaths = ["tests", "src"]
 addopts = "-ra --doctest-modules --import-mode=importlib"
+# tests/differential imports its scene runner as ``differential.engines``.
+pythonpath = ["tests"]
+markers = [
+    "differential: compares Jolt with omi_physics; skipped where omi_physics is not installed",
+]
 
 [tool.openglcontext-checks]
 # The OGC rules (openglcontext-checks) this project is clean of, held by the
@@ -155,8 +160,14 @@ exclude = ["*.md", "extern", "src/pyjoltphysics/_native.pyi"]
 
 [tool.mypy]
 python_version = "3.12"
+mypy_path = "tests"
 strict = true
 warn_unused_ignores = true
+
+# The differential suite's reference engine, absent from the typecheck environment.
+[[tool.mypy.overrides]]
+module = ["omi_physics", "omi_physics.*"]
+ignore_missing_imports = true
 
 [tool.cibuildwheel]
 # cibuildwheel 3.4.1, pinned in .github/workflows/test.yml: the 4.x series
