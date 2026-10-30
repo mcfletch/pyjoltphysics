@@ -16,6 +16,8 @@
 #include <deque>
 #include <mutex>
 #include <variant>
+#include <memory>
+#include <string>
 #include <vector>
 
 namespace pj {
@@ -122,11 +124,33 @@ struct SwapBodies {
     AddBodies add;
 };
 
+// Motion properties of moving bodies; a NaN keeps a value.
+struct SetMotion {
+    std::vector<Uid> uids;
+    std::vector<float> mass;             // kg; scales the inertia with it
+    std::vector<float> linear_damping;   // 1/s
+    std::vector<float> angular_damping;  // 1/s
+    std::vector<float> gravity_factor;
+};
+
+// Sets or clears flag bits a body may change after it is added (report, no sleep).
+struct SetFlags {
+    std::vector<Uid> uids;
+    uint32_t bits = 0;
+    bool on = false;
+};
+
+// A state from save_state, read back into the bodies and constraints.
+struct RestoreState {
+    std::shared_ptr<const std::string> data;
+};
+
 using Command = std::variant<AddBodies, RemoveBodies, SetTransforms, SetVelocities, AddPushes,
                              SetGravity, Activate, SetMotionTypes, SetMaterials, SwapBodies,
                              AddCharacter, RemoveCharacters, CharacterOps, SetCharacterIgnore, AddJoints,
                              RemoveJoints, SetJointMotors, SetJointsEnabled, SetBodyMaterials, SetBodyFilters,
-                             SetMaterialTable, SetFilterTable, SetGravityZones, SetDrag, SetTracks, MoveKinematic>;
+                             SetMaterialTable, SetFilterTable, SetGravityZones, SetDrag, SetTracks, MoveKinematic,
+                             SetMotion, SetFlags, RestoreState>;
 
 // The uids a batch takes when it is submitted: one a body it adds, one a character.
 uint32_t uids_wanted(const Command &command);

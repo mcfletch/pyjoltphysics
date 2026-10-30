@@ -33,7 +33,7 @@ import numpy.typing as npt
 from pyjoltphysics import _native
 from pyjoltphysics.bodies import BodyBatch
 from pyjoltphysics.characters import Character, CharacterCapabilities, CharacterRows
-from pyjoltphysics.enums import MotionType, MotorMode, ShapeKind
+from pyjoltphysics.enums import BodyFlag, MotionType, MotorMode, ShapeKind
 from pyjoltphysics.events import as_events
 from pyjoltphysics.fields import GravityZone, Track, zone_arrays
 from pyjoltphysics.joints import Joint, JointRows, joint_arrays
@@ -938,6 +938,59 @@ class World:
         """Queue quadratic drag coefficients (1/m): a force of ``-k m |v| v``; 0 removes it."""
         ids = _uids(uids)
         return self._native.set_drag(ids, _column(drag, len(ids), np.float32, 'drag'), at_tick)
+
+    def set_motion(
+        self,
+        uids: npt.ArrayLike,
+        mass: npt.ArrayLike | None = None,
+        linear_damping: npt.ArrayLike | None = None,
+        angular_damping: npt.ArrayLike | None = None,
+        gravity_factor: npt.ArrayLike | None = None,
+        at_tick: int = 0,
+    ) -> int:
+        """Queue new motion properties for moving bodies; None, or NaN in an array, keeps a value.
+
+        ``mass`` (kg, dynamic bodies) scales the inertia with it; damping is
+        1/s; ``gravity_factor`` multiplies gravity. A static body is rejected.
+        Each changed dynamic body is woken.
+        """
+        ids = _uids(uids)
+        n = len(ids)
+
+        def column(values: npt.ArrayLike | None, name: str) -> np.ndarray:
+            return _column(np.nan if values is None else values, n, np.float32, name)
+
+        return self._native.set_motion(
+            ids,
+            column(mass, 'mass'),
+            column(linear_damping, 'linear_damping'),
+            column(angular_damping, 'angular_damping'),
+            column(gravity_factor, 'gravity_factor'),
+            at_tick,
+        )
+
+    def set_flags(self, uids: npt.ArrayLike, flags: BodyFlag, on: bool, at_tick: int = 0) -> int:
+        """Queue setting (``on``) or clearing ``flags`` on bodies: ``REPORT`` and ``NO_SLEEP`` only."""
+        bits = int(flags)
+        if bits & ~int(BodyFlag.REPORT | BodyFlag.NO_SLEEP):
+            raise ValueError('only REPORT and NO_SLEEP change after a body is added')
+        return self._native.set_flags(_uids(uids), bits, bool(on), at_tick)
+
+    def save_state(self) -> bytes:
+        """The bodies' and joints' state (Jolt's ``PhysicsSystem::SaveState``), read between ticks.
+
+        Positions, velocities, sleep, contacts and constraint state; not the
+        characters, the tick count or the batches still queued.
+        """
+        return bytes(self._native.save_state())
+
+    def restore_state(self, data: bytes, at_tick: int = 0) -> int:
+        """Queue reading a :meth:`save_state` back, at the start of the tick that applies it.
+
+        The world must hold the bodies and joints it held when the state was
+        saved; a state of another layout is rejected (``stats()['rejected']``).
+        """
+        return self._native.restore_state(bytes(data), at_tick)
 
     def set_track(self, uids: npt.ArrayLike, track: Track, at_tick: int = 0) -> int:
         """Queue kinematic bodies onto ``track``, from the tick that applies the batch.

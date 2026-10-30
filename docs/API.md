@@ -125,6 +125,9 @@ skipped and counted in `stats()['rejected']`.
 | `set_body_materials(uids, material)` | material indices (below) |
 | `set_body_filters(uids, filters)` | collision filter indices (below) |
 | `set_drag(uids, drag)` | quadratic drag coefficients, 1/m |
+| `set_motion(uids, mass=None, linear_damping=None, angular_damping=None, gravity_factor=None)` | moving bodies' motion properties; None, or NaN in an array, keeps a value; a new mass scales the inertia with it; changed dynamic bodies wake |
+| `set_flags(uids, flags, on)` | set or clear `BodyFlag.REPORT` and `BodyFlag.NO_SLEEP`, the flags that change after a body is added |
+| `restore_state(data)` | read a `save_state()` back into the bodies and joints (below) |
 
 Vectors are (n, 3) arrays, or one (3,) vector for every body; quaternions are
 `(x, y, z, w)`. Values that are not finite, zero quaternions, and arrays
@@ -805,6 +808,18 @@ sets it to 1 ms while a physics-thread callback is registered.
 A world's callbacks may refer to the world: the world type takes part in
 Python's cyclic garbage collection, so a world and its callbacks are
 collected together.
+
+## Saving and restoring
+
+`save_state()` returns the bodies' and joints' state as bytes: Jolt's
+`PhysicsSystem::SaveState` (positions, velocities, sleep, contact cache and
+constraint state) after a header naming the bodies it holds. It is read
+under the world lock between ticks. `restore_state(data)` is a command: at
+the start of the tick that applies it the world takes the state back, so a
+lockstep world given the same batches afterwards repeats the run from the
+save. A world holding other bodies than the state names rejects it
+(`stats()['rejected']`). Characters, the tick count and queued batches are
+not part of the state.
 
 ## Determinism and replay
 

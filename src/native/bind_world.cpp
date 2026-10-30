@@ -1337,6 +1337,52 @@ void bind_world(nb::module_ &m) {
              nb::arg("rotation"), nb::arg("half"), nb::arg("shape_id"), nb::arg("gravity"), nb::arg("direction"),
              nb::arg("center"), nb::arg("priority"), nb::arg("replace"), nb::arg("stop"), nb::arg("at_tick") = 0)
         .def(
+            "set_motion",
+            [](World &w, const Uids &ids, const Floats &mass, const Floats &linear, const Floats &angular,
+               const Floats &gravity, uint64_t at_tick) {
+                const size_t n = ids.shape(0);
+                SetMotion set{uids(ids), copy<float>(mass, n, "mass"), copy<float>(linear, n, "linear_damping"),
+                              copy<float>(angular, n, "angular_damping"), copy<float>(gravity, n, "gravity_factor")};
+                for (size_t i = 0; i < n; ++i) {
+                    if (!std::isnan(set.mass[i]) && !(std::isfinite(set.mass[i]) && set.mass[i] > 0.0f))
+                        throw std::invalid_argument("mass is a finite number above 0");
+                    for (float k : {set.linear_damping[i], set.angular_damping[i]})
+                        if (!std::isnan(k) && !(std::isfinite(k) && k >= 0.0f))
+                            throw std::invalid_argument("damping is finite and not negative");
+                    if (!std::isnan(set.gravity_factor[i]) && !std::isfinite(set.gravity_factor[i]))
+                        throw std::invalid_argument("gravity_factor is finite");
+                }
+                return w.core().submit(Command(std::move(set)), at_tick);
+            },
+            nb::arg("uids"), nb::arg("mass"), nb::arg("linear_damping"), nb::arg("angular_damping"),
+            nb::arg("gravity_factor"), nb::arg("at_tick") = 0)
+        .def(
+            "set_flags",
+            [](World &w, const Uids &ids, uint32_t bits, bool on, uint64_t at_tick) {
+                if ((bits & ~(flag::kReport | flag::kNoSleep)) != 0)
+                    throw std::invalid_argument("only REPORT and NO_SLEEP change after a body is added");
+                SetFlags set{uids(ids), bits, on};
+                return w.core().submit(Command(std::move(set)), at_tick);
+            },
+            nb::arg("uids"), nb::arg("bits"), nb::arg("on"), nb::arg("at_tick") = 0)
+        .def(
+            "save_state",
+            [](World &w) {
+                std::string data;
+                {
+                    nb::gil_scoped_release release;
+                    data = w.core().save_state();
+                }
+                return nb::bytes(data.data(), data.size());
+            })
+        .def(
+            "restore_state",
+            [](World &w, nb::bytes data, uint64_t at_tick) {
+                auto copy = std::make_shared<const std::string>(data.c_str(), data.size());
+                return w.core().submit(Command(RestoreState{std::move(copy)}), at_tick);
+            },
+            nb::arg("data"), nb::arg("at_tick") = 0)
+        .def(
             "set_drag",
             [](World &w, const Uids &ids, const Floats &drag, uint64_t at_tick) {
                 SetDrag set{uids(ids), copy<float>(drag, ids.shape(0), "drag")};

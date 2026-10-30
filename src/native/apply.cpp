@@ -3,9 +3,13 @@
 // skipped; one the body cannot take is skipped and counted as rejected.
 #include "world.h"
 
+#include <cmath>
+#include <cstring>
+
 #include <Jolt/Physics/Body/BodyCreationSettings.h>
 #include <Jolt/Physics/Body/BodyInterface.h>
 #include <Jolt/Physics/Body/BodyLock.h>
+#include <Jolt/Physics/StateRecorderImpl.h>
 #include <Jolt/Physics/Collision/BroadPhase/BroadPhaseQuery.h>
 #include <Jolt/Physics/Collision/CollisionCollectorImpl.h>
 
@@ -479,6 +483,106 @@ void WorldCore::move_kinematics(uint64_t index) {
         }
     }
     driven_.clear();
+}
+
+void WorldCore::apply(SetMotion &set, uint64_t) {
+    JPH::BodyInterface &bodies = system_.GetBodyInterfaceNoLock();
+    const JPH::BodyLockInterfaceNoLock &locks = system_.GetBodyLockInterfaceNoLock();
+    for (size_t i = 0; i < set.uids.size(); ++i) {
+        const Row *row = find(set.uids[i]);
+        if (row == nullptr)
+            continue;
+        JPH::Body *body = locks.TryGetBody(row->id);
+        if (body == nullptr || body->IsStatic()) {
+            ++rejected_;
+            continue;
+        }
+        JPH::MotionProperties *motion = body->GetMotionProperties();
+        if (!std::isnan(set.linear_damping[i]))
+            motion->SetLinearDamping(set.linear_damping[i]);
+        if (!std::isnan(set.angular_damping[i]))
+            motion->SetAngularDamping(set.angular_damping[i]);
+        if (!std::isnan(set.gravity_factor[i]))
+            motion->SetGravityFactor(set.gravity_factor[i]);
+        if (!std::isnan(set.mass[i]) && body->IsDynamic()) {
+            // The shape keeps its distribution of mass: the inertia scales with the mass.
+            const float old_inverse = motion->GetInverseMass();
+            const float new_inverse = 1.0f / set.mass[i];
+            const float scale = old_inverse > 0.0f ? new_inverse / old_inverse : 1.0f;
+            motion->SetInverseMass(new_inverse);
+            motion->SetInverseInertia(motion->GetInverseInertiaDiagonal() * scale, motion->GetInertiaRotation());
+        }
+        if (body->IsDynamic())
+            bodies.ActivateBody(row->id);
+    }
+}
+
+void WorldCore::apply(SetFlags &set, uint64_t) {
+    JPH::BodyInterface &bodies = system_.GetBodyInterfaceNoLock();
+    const JPH::BodyLockInterfaceNoLock &locks = system_.GetBodyLockInterfaceNoLock();
+    for (Uid uid : set.uids) {
+        const Row *row = find(uid);
+        if (row == nullptr)
+            continue;
+        JPH::Body *body = locks.TryGetBody(row->id);
+        if (body == nullptr)
+            continue;
+        const uint64_t user = body->GetUserData();
+        const uint32_t flags = set.on ? (flags_of(user) | set.bits) : (flags_of(user) & ~set.bits);
+        body->SetUserData(user_data(uid_of(user), flags, material_bits_of(user)));
+        if ((set.bits & flag::kNoSleep) != 0 && !body->IsStatic()) {
+            body->SetAllowSleeping(!set.on);
+            if (set.on)
+                bodies.ActivateBody(row->id);
+        }
+    }
+}
+
+void WorldCore::apply(RestoreState &restore, uint64_t) {
+    // The state begins with the uids of the bodies it holds, in row order; a
+    // world holding other bodies cannot take it.
+    const std::string &data = *restore.data;
+    uint64_t count = 0;
+    if (data.size() < sizeof(count)) {
+        ++rejected_;
+        return;
+    }
+    std::memcpy(&count, data.data(), sizeof(count));
+    const size_t header = sizeof(count) + count * sizeof(Uid);
+    if (data.size() < header || count != rows_.size()) {
+        ++rejected_;
+        return;
+    }
+    for (size_t i = 0; i < count; ++i) {
+        Uid uid = 0;
+        std::memcpy(&uid, data.data() + sizeof(count) + i * sizeof(Uid), sizeof(uid));
+        if (uid != rows_[i].uid) {
+            ++rejected_;
+            return;
+        }
+    }
+    JPH::StateRecorderImpl recorder;
+    recorder.WriteBytes(data.data() + header, data.size() - header);
+    recorder.Rewind();
+    if (!system_.RestoreState(recorder)) {
+        ++rejected_;
+        return;
+    }
+    for (uint32_t row = 0; row < rows_.size(); ++row)
+        publisher_.mark(row);
+}
+
+std::string WorldCore::save_state() {
+    check();
+    std::unique_lock<WorldLock> exclusive(world_lock_);
+    JPH::StateRecorderImpl recorder;
+    system_.SaveState(recorder);
+    const uint64_t count = rows_.size();
+    std::string out(sizeof(count) + count * sizeof(Uid), '\0');
+    std::memcpy(out.data(), &count, sizeof(count));
+    for (size_t i = 0; i < count; ++i)
+        std::memcpy(out.data() + sizeof(count) + i * sizeof(Uid), &rows_[i].uid, sizeof(Uid));
+    return out + recorder.GetData();
 }
 
 }  // namespace pj

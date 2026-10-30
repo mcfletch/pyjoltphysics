@@ -165,6 +165,10 @@ public:
 
     ShapeLibrary &shapes() { return shapes_; }
 
+    // The bodies' and constraints' state as Jolt's StateRecorder writes it,
+    // read between ticks under the world lock; callers release the GIL.
+    std::string save_state();
+
     // -- the world thread, inside a callback ---------------------------------
     // Kinematic targets for the end of the current tick, from Body.drive's
     // callables; applied after before_step.
@@ -250,6 +254,9 @@ private:
     void apply(SetDrag &set, uint64_t index);
     void apply(SetTracks &set, uint64_t index);
     void apply(MoveKinematic &move, uint64_t index);
+    void apply(SetMotion &set, uint64_t index);
+    void apply(SetFlags &set, uint64_t index);
+    void apply(RestoreState &restore, uint64_t index);
     // joints.cpp
     void remove_joint(Joint &joint, uint64_t index, uint16_t reason);
     void remove_joints_of(const std::vector<Uid> &uids, uint64_t index);
