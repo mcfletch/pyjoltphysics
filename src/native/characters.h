@@ -15,6 +15,7 @@
 
 #include "common.h"
 #include "events.h"
+#include "fields.h"
 
 #include <Jolt/Core/JobSystem.h>
 #include <Jolt/Core/TempAllocator.h>
@@ -140,6 +141,8 @@ public:
     // Moves the events the ops made into `events`, in id order.
     void flush_events(std::vector<Event> &events);
     void set_ignore(Uid id, std::vector<Uid> ignore);
+    // The world's gravity zones, which change each character's gravity.
+    void set_zones(const std::vector<Zone> *zones) { zones_ = zones; }
     // Moves every character by dt; `tick` is the tick the move belongs to.
     void step(double dt, uint32_t tick, JPH::JobSystem &jobs, std::vector<Event> &events);
 
@@ -163,6 +166,7 @@ private:
     std::vector<std::vector<uint32_t>> islands_;
     struct Listener;
     std::unique_ptr<Listener> listener_;
+    const std::vector<Zone> *zones_ = nullptr;
 };
 
 }  // namespace pj

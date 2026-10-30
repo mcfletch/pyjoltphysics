@@ -19,6 +19,7 @@
 #pragma once
 
 #include "common.h"
+#include "materials.h"
 
 #include <Jolt/Physics/Body/BodyActivationListener.h>
 #include <Jolt/Physics/Body/BodyID.h>
@@ -35,13 +36,14 @@ class BodyInterface;
 
 namespace pj {
 
-enum class EventKind : uint8_t { Contact = 0, Trigger = 1, State = 2, Character = 3 };
+enum class EventKind : uint8_t { Contact = 0, Trigger = 1, State = 2, Character = 3, Joint = 4 };
 // A character's records: begin and end of a touch with body b, a landing on
 // b (approach is the speed), a jump (approach is the launch speed), a slide
 // begun, knocked down, got up.
 enum class EventPhase : uint8_t {
     Begin = 0, Persist = 1, End = 2, Sleep = 3, Wake = 4,
     Land = 5, Jump = 6, Slide = 7, Down = 8, Up = 9,
+    Break = 10,  // a joint broke: a is the joint, approach the force (N), impulse the torque (N m)
 };
 enum class EndReason : uint16_t { None = 0, Removed = 1 };
 
@@ -62,7 +64,8 @@ struct Event {
     // Jolt calls its listeners before the solver runs, so no record carries
     // the impulse the solver applied.
     float impulse;
-    uint32_t reserved;  // zero
+    uint16_t material_a;  // contact begin and persist: the material index of each side
+    uint16_t material_b;
 };
 static_assert(sizeof(Event) == 64, "the event record is 64 bytes");
 
@@ -79,12 +82,22 @@ struct RawContact {
     float normal[3];  // from body 1 to body 2
     float approach;
     float impulse;
+    uint16_t material1, material2;
 };
 
 struct RawActivation {
     JPH::BodyID id;
     Uid uid;
     bool active;
+};
+
+// Answers the contact filter for a pair whose bodies both carry
+// flag::kFilterContacts; on Jolt's job threads.
+class ContactFilterHost {
+public:
+    virtual ~ContactFilterHost() = default;
+    virtual bool solve_pair(const JPH::Body &body1, const JPH::Body &body2, JPH::RVec3Arg base,
+                            const JPH::CollideShapeResult &result) = 0;
 };
 
 // Jolt's listener interfaces, collecting raw reports from any thread.
@@ -97,6 +110,8 @@ public:
                             const JPH::ContactManifold &manifold,
                             JPH::ContactSettings &settings) override;
     void OnContactRemoved(const JPH::SubShapeIDPair &pair) override;
+    JPH::ValidateResult OnContactValidate(const JPH::Body &body1, const JPH::Body &body2, JPH::RVec3Arg base,
+                                          const JPH::CollideShapeResult &result) override;
     void OnBodyActivated(const JPH::BodyID &id, JPH::uint64 user) override;
     void OnBodyDeactivated(const JPH::BodyID &id, JPH::uint64 user) override;
 
@@ -104,6 +119,8 @@ public:
     // sleep or wake events.
     std::atomic<bool> quiet{false};
     float min_velocity_for_restitution = 1.0f;
+    const MaterialTable *materials = nullptr;
+    ContactFilterHost *filter = nullptr;
 
     void take(std::vector<RawContact> &contacts, std::vector<RawActivation> &activations);
 
@@ -130,6 +147,7 @@ public:
     // Ends every pair a removed body was in, as the removal is applied.
     void remove_bodies(const std::vector<JPH::BodyID> &ids, uint32_t tick, std::vector<Event> &out);
     size_t pairs() const { return pairs_.size(); }
+    bool touching(uint64_t key) const { return pairs_.count(key) != 0; }
 
 private:
     static constexpr uint32_t kNever = 0xffffffffu;

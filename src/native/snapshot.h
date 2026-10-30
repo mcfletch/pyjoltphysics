@@ -49,12 +49,27 @@ struct SnapshotBuffer {
     std::vector<float> char_landing;        // speed of the last landing, m/s
     std::vector<uint32_t> char_landed_tick; // tick of the last landing; 0 for none
     std::vector<float> char_height;         // capsule height, metres
+    std::vector<double> char_previous;      // (n, 3) capsule centre at the tick before
+    std::vector<double> char_eye;           // (n, 3) eye position, metres
+    std::vector<uint16_t> char_ground_material;  // material index underfoot
+    std::vector<uint8_t> char_flags;        // CharacterFlag bits
+
+    // Joints, every row written each tick, in ascending id.
+    uint32_t joints = 0;
+    std::vector<uint32_t> joint_id;
+    std::vector<uint8_t> joint_kind;
+    std::vector<uint8_t> joint_state;
+    std::vector<float> joint_value;   // hinge angle (rad), slider position (m), distance length (m)
+    std::vector<float> joint_value2;  // SIXDOF: rotation about its y and z axes (rad) in value, value2
+    std::vector<float> joint_force;   // N carried in the last step
+    std::vector<float> joint_torque;  // N m carried in the last step
 
     bool written = false;
     uint64_t written_tick = 0;
 
     void resize(uint32_t count);
     void resize_characters(uint32_t count);
+    void resize_joints(uint32_t count);
 };
 
 // Owned by the world thread.

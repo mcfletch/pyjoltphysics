@@ -33,6 +33,9 @@ const JPH::Vec3 kUp = JPH::Vec3::sAxisY();
 
 // How far past the capsule a body still counts as touched, metres.
 constexpr float kTouchSkin = 0.02f;
+// A teleport that leaves the capsule this far inside a body leaves it stuck.
+constexpr float kStuckDepth = 0.01f;
+constexpr uint8_t kFlagStuck = 1;
 // The raise of the capsule tested for standing up, so the floor it stands on
 // is not in the way.
 constexpr float kStandClearance = 0.02f;
@@ -87,7 +90,8 @@ private:
 struct Character {
     Uid id = kNoBody;
     CharacterCaps caps;
-    double gravity = 9.81;
+    double gravity = 9.81;       // this tick's: the character's own, as the zones leave it
+    double own_gravity = 9.81;   // m/s2 downward, as added or set
     uint32_t group = 1, mask = 0xffffffffu, pass_group = 0;
     std::vector<Uid> ignore;
     JPH::Ref<JPH::CharacterVirtual> cv;
@@ -122,6 +126,8 @@ struct Character {
     Uid ground_uid = kNoBody;
     bool pushing = false;  // walked into a body it can push, last tick
     bool teleported = true;  // the proxy is put, not moved, where the character is
+    bool stuck = false;      // the last teleport left the capsule inside geometry
+    JPH::RVec3 previous = JPH::RVec3::sZero();  // capsule centre at the tick before
     std::vector<Uid> touching;  // ascending
     std::vector<Event> events;
 
@@ -500,11 +506,19 @@ Uid ground_uid_of(const Character &c) {
     return kNoBody;
 }
 
-void track_touches(Character &c, uint32_t tick) {
+// Touches of bodies and of other characters. A begin's approach is the
+// closing speed along the normal; its impulse is the momentum a dynamic body
+// brings at that speed, for a caller deciding a knockback.
+void track_touches(const JPH::PhysicsSystem &system, Character &c, uint32_t tick) {
     std::vector<std::pair<Uid, const JPH::CharacterContact *>> now;
-    for (const JPH::CharacterContact &contact : c.cv->GetActiveContacts())
-        if (!contact.mBodyB.IsInvalid() && !contact.mWasDiscarded && contact.mDistance < kTouchSkin)
+    for (const JPH::CharacterContact &contact : c.cv->GetActiveContacts()) {
+        if (contact.mWasDiscarded || contact.mDistance >= kTouchSkin)
+            continue;
+        if (!contact.mBodyB.IsInvalid())
             now.emplace_back(uid_of(contact.mUserData), &contact);
+        else if (!contact.mCharacterIDB.IsInvalid())
+            now.emplace_back(Uid(contact.mCharacterIDB.GetValue()), &contact);
+    }
     std::sort(now.begin(), now.end(), [](const auto &a, const auto &b) { return a.first < b.first; });
     now.erase(std::unique(now.begin(), now.end(), [](const auto &a, const auto &b) { return a.first == b.first; }),
               now.end());
@@ -513,8 +527,17 @@ void track_touches(Character &c, uint32_t tick) {
     for (const auto &[uid, contact] : now) {
         uids.push_back(uid);
         if (!std::binary_search(c.touching.begin(), c.touching.end(), uid)) {
-            const float approach = std::max(0.0f, -c.velocity.Dot(contact->mContactNormal));
+            const float approach =
+                std::max(0.0f, (contact->mLinearVelocity - c.velocity).Dot(contact->mContactNormal));
             c.event(EventPhase::Begin, tick, uid, approach, contact->mPosition, -contact->mContactNormal);
+            if (contact->mMotionTypeB == JPH::EMotionType::Dynamic && !contact->mBodyB.IsInvalid()) {
+                // Islands give each dynamic body to one job, so reading it without a lock is safe.
+                if (const JPH::Body *body = system.GetBodyLockInterfaceNoLock().TryGetBody(contact->mBodyB)) {
+                    const float inverse = body->GetMotionProperties()->GetInverseMass();
+                    if (inverse > 0.0f)
+                        c.events.back().impulse = approach / inverse;
+                }
+            }
         }
     }
     for (Uid uid : c.touching)
@@ -680,7 +703,7 @@ void CharacterSystem::add(const AddCharacter &add, JPH::ObjectLayer proxy_layer,
     Character &c = *made;
     c.id = add.uid;
     c.caps = add.caps;
-    c.gravity = add.gravity;
+    c.gravity = c.own_gravity = add.gravity;
     c.group = add.group;
     c.mask = add.mask;
     c.pass_group = add.pass_group;
@@ -699,6 +722,7 @@ void CharacterSystem::add(const AddCharacter &add, JPH::ObjectLayer proxy_layer,
                                      &system_);
     c.cv->SetListener(listener_.get());
     c.shape_height = c.caps.stand_height;
+    c.previous = JPH::RVec3(add.position[0], add.position[1], add.position[2]);
     (void)temp;
     if (add.proxy) {
         JPH::BodyCreationSettings body(capsule(c.caps.stand_height, c.caps.radius), feet, JPH::Quat::sIdentity(),
@@ -889,6 +913,10 @@ bool CharacterSystem::apply(const CharacterOp &op, uint32_t tick, JPH::TempAlloc
             c.cv->StickToFloor(JPH::Vec3(0.0f, float(-search), 0.0f), kEveryTree, c.layer_filter, c.body_filter,
                                kEveryShape, temp);
         c.cv->RefreshContacts(kEveryTree, c.layer_filter, c.body_filter, kEveryShape, temp);
+        c.stuck = false;
+        for (const JPH::CharacterContact &contact : c.cv->GetActiveContacts())
+            if (!contact.mBodyB.IsInvalid() && contact.mDistance < -kStuckDepth)
+                c.stuck = true;
         if (c.cv->GetGroundState() == JPH::CharacterVirtual::EGroundState::OnGround) {
             c.grounded = true;
             c.ground_normal = c.cv->GetGroundNormal();
@@ -897,7 +925,7 @@ bool CharacterSystem::apply(const CharacterOp &op, uint32_t tick, JPH::TempAlloc
         break;
     }
     case CharacterOpCode::Gravity:
-        c.gravity = op.v[0];
+        c.gravity = c.own_gravity = op.v[0];
         break;
     case CharacterOpCode::PassGroup:
         c.pass_group = uint32_t(op.v[0]);
@@ -977,6 +1005,15 @@ void CharacterSystem::islands(double dt) {
 void CharacterSystem::step(double dt, uint32_t tick, JPH::JobSystem &jobs, std::vector<Event> &events) {
     if (characters_.empty())
         return;
+    for (const auto &held : characters_) {
+        Character &c = *held;
+        c.previous = c.feet() + JPH::Vec3(0.0f, float(0.5 * c.height()), 0.0f);
+        if (zones_ != nullptr && !zones_->empty())
+            c.gravity = -double(zone_gravity(*zones_, c.previous, JPH::Vec3(0.0f, float(-c.own_gravity), 0.0f))
+                                    .GetY());
+        else
+            c.gravity = c.own_gravity;
+    }
     islands(dt);
     const size_t count = islands_.size();
     const size_t chunks = std::min(temps_.size(), count);
@@ -1008,7 +1045,7 @@ void CharacterSystem::step(double dt, uint32_t tick, JPH::JobSystem &jobs, std::
             if (members.size() > 1)
                 push_each_other(members);
             for (Character *c : members) {
-                track_touches(*c, tick);
+                track_touches(system_, *c, tick);
                 c->cv->SetCharacterVsCharacterCollision(nullptr);
             }
         }
@@ -1074,6 +1111,23 @@ void CharacterSystem::write(SnapshotBuffer &out) const {
         out.char_landing[i] = c.landing_speed;
         out.char_landed_tick[i] = c.landed_tick;
         out.char_height[i] = float(h);
+        for (int k = 0; k < 3; ++k)
+            out.char_previous[3 * i + k] = c.previous[k];
+        const double eye = double(c.caps.eye_height) * h / double(c.caps.stand_height);
+        out.char_eye[3 * i] = feet.GetX();
+        out.char_eye[3 * i + 1] = feet.GetY() + eye;
+        out.char_eye[3 * i + 2] = feet.GetZ();
+        uint16_t material = 0;
+        if (c.grounded) {
+            const JPH::PhysicsMaterial *ground = c.cv->GetGroundMaterial();
+            const auto *indexed = dynamic_cast<const IndexedMaterial *>(ground);
+            if (indexed != nullptr && indexed->index != 0)
+                material = indexed->index;
+            else if (!c.cv->GetGroundBodyID().IsInvalid())
+                material = material_bits_of(c.cv->GetGroundUserData());
+        }
+        out.char_ground_material[i] = material;
+        out.char_flags[i] = uint8_t((c.stuck ? kFlagStuck : 0));
     }
 }
 

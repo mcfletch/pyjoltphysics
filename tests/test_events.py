@@ -38,7 +38,8 @@ def test_the_record_is_64_bytes() -> None:
         'normal',
         'approach',
         'impulse',
-        'reserved',
+        'material_a',
+        'material_b',
     )
 
 

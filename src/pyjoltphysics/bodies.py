@@ -64,7 +64,11 @@ class BodyBatch:
     ``density`` (kg/m3) and its shape's volume. Damping of None takes the
     world's :class:`~pyjoltphysics.WorldSettings` default. ``group`` and
     ``mask`` are 32-bit collision bit sets: two bodies collide when each
-    one's group shares a bit with the other's mask.
+    one's group shares a bit with the other's mask, and the world's filter
+    table lets their ``filter`` indices meet. ``material`` is a row of the
+    world's :class:`~pyjoltphysics.MaterialTable`, 0 for the body's own
+    ``friction`` and ``restitution``. ``quadratic_drag`` (1/m) is a force of
+    ``-k m |v| v``.
     """
 
     positions: ArrayLike
@@ -89,6 +93,9 @@ class BodyBatch:
     group: ArrayLike = 1
     mask: ArrayLike = _ALL_GROUPS
     flags: BodyFlag | ArrayLike = BodyFlag.NONE
+    material: ArrayLike = 0
+    filter: ArrayLike = 0
+    quadratic_drag: ArrayLike = 0.0
 
     def __len__(self) -> int:
         return int(np.shape(self.positions)[0])
@@ -244,6 +251,9 @@ class BodyBatch:
             'group': _rows(self.group, n, 1, np.uint32, 'group'),
             'mask': _rows(self.mask, n, 1, np.uint32, 'mask'),
             'flags': _rows(self.flags, n, 1, np.uint32, 'flags'),
+            'material': _rows(self.material, n, 1, np.uint16, 'material'),
+            'filter': _rows(self.filter, n, 1, np.uint16, 'filter'),
+            'drag': _rows(self.quadratic_drag, n, 1, np.float32, 'quadratic_drag'),
         }
 
     def _shape_ids(self, n: int, shape_id: Callable[[Shape], int] | None) -> np.ndarray:

@@ -216,7 +216,12 @@ class CharacterRows:
     ``ground_normal`` its unit normal. ``slide_progress`` runs 0 to 1 through
     a slide. ``landing_speed`` (m/s) is the downward speed of the last
     landing, at ``landed_tick`` (0 before the first). ``height`` is the
-    capsule's height.
+    capsule's height. ``previous`` is the capsule's centre at the tick before,
+    for drawing between the two. ``eye`` is the eye position: ``eyeHeight``
+    above the feet, scaled by the capsule's height over ``standHeight``.
+    ``ground_material`` is the material index underfoot (a mesh triangle's own
+    where it has one). ``stuck`` is true where the last teleport left the
+    capsule inside geometry.
     """
 
     __slots__ = ('_native', '_rows', 'tick')
@@ -284,6 +289,26 @@ class CharacterRows:
     def height(self) -> npt.NDArray[np.float32]:
         """(n,) capsule height, metres."""
         return self._native.character_height
+
+    @property
+    def previous(self) -> npt.NDArray[np.float64]:
+        """(n, 3) capsule centres at the tick before, metres."""
+        return self._native.character_previous
+
+    @property
+    def eye(self) -> npt.NDArray[np.float64]:
+        """(n, 3) eye positions, metres."""
+        return self._native.character_eye
+
+    @property
+    def ground_material(self) -> npt.NDArray[np.uint16]:
+        """(n,) material index underfoot; 0 in the air or on a body of no material."""
+        return self._native.character_ground_material
+
+    @property
+    def stuck(self) -> npt.NDArray[np.bool_]:
+        """(n,) true where the last teleport left the capsule inside geometry."""
+        return (self._native.character_flags & 1).astype(np.bool_)
 
     @property
     def rows(self) -> dict[int, int]:

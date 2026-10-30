@@ -24,6 +24,10 @@ bool finalizing() {
 
 void mark_interpreter_exiting() { exiting = true; }
 
+bool python_available() { return !finalizing(); }
+
+thread_local bool in_contact_filter = false;
+
 PythonThread::PythonThread() : interpreter_(PyInterpreterState_Get()) {}
 
 bool PythonThread::attach() {
@@ -78,7 +82,7 @@ std::vector<nb::object> CallbackSet::take_due(uint64_t tick) {
 }
 
 int CallbackSet::traverse(visitproc visit, void *arg) {
-    for (nb::object *slot : {&before_step, &after_step, &on_events})
+    for (nb::object *slot : {&before_step, &after_step, &on_events, &drivers, &contact_filter})
         if (slot->is_valid())
             Py_VISIT(slot->ptr());
     for (auto &entry : at_tick)
@@ -88,15 +92,17 @@ int CallbackSet::traverse(visitproc visit, void *arg) {
 }
 
 void CallbackSet::clear() {
-    nb::object before, after, events;
+    nb::object before, after, events, drive, filter;
     std::multimap<uint64_t, nb::object> pending;
     {
         std::lock_guard<std::mutex> guard(lock);
         before = std::move(before_step);
         after = std::move(after_step);
         events = std::move(on_events);
+        drive = std::move(drivers);
+        filter = std::move(contact_filter);
         pending.swap(at_tick);
-        has_before = has_after = has_events = has_at_tick = false;
+        has_before = has_after = has_events = has_at_tick = has_drivers = has_contact_filter = false;
         earliest_at_tick = UINT64_MAX;
     }
 }

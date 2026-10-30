@@ -32,6 +32,7 @@ using Doubles = In<double, nb::shape<-1>>;
 using Floats = In<float, nb::shape<-1>>;
 using Bytes = In<uint8_t, nb::shape<-1>>;
 using Words = In<uint32_t, nb::shape<-1>>;
+using Shorts = In<uint16_t, nb::shape<-1>>;
 
 template <typename T, typename Array> std::vector<T> copy(const Array &array, size_t rows, const char *name) {
     if (array.shape(0) != rows)
@@ -197,12 +198,13 @@ template <size_t N> std::array<float, N> row_of(const std::vector<double> &value
         const Bytes &motion, const Doubles &mass, const Doubles &density, const Floats &friction, \
         const Floats &restitution, const Floats &linear_damping, const Floats &angular_damping,   \
         const Floats &gravity_factor, const Vec3s &linear_velocity,                               \
-        const Vec3s &angular_velocity, const Words &group, const Words &mask, const Words &flags
+        const Vec3s &angular_velocity, const Words &group, const Words &mask, const Words &flags, \
+        const Shorts &material, const Shorts &filter, const Floats &drag
 #define PJ_ADD_NAMES                                                                              \
     position, orientation, shape_kind, shape_params, shape_id, scale, shape_offset,              \
         shape_rotation, center_of_mass, motion, mass, density, friction, restitution,             \
         linear_damping, angular_damping, gravity_factor, linear_velocity, angular_velocity,       \
-        group, mask, flags
+        group, mask, flags, material, filter, drag
 
 // The rows of an add batch, checked, with their shapes resolved.
 AddBodies build_add(World &world, const Vec3s &position, const Quats &orientation, const Bytes &shape_kind,
@@ -212,7 +214,8 @@ AddBodies build_add(World &world, const Vec3s &position, const Quats &orientatio
            const Floats &friction, const Floats &restitution, const Floats &linear_damping,
            const Floats &angular_damping, const Floats &gravity_factor,
            const Vec3s &linear_velocity, const Vec3s &angular_velocity, const Words &group,
-           const Words &mask, const Words &flags) {
+           const Words &mask, const Words &flags, const Shorts &material, const Shorts &filter,
+           const Floats &drag) {
     const size_t n = position.shape(0);
     AddBodies add;
     add.position = copy<double>(position, n, "position");
@@ -237,6 +240,12 @@ AddBodies build_add(World &world, const Vec3s &position, const Quats &orientatio
     add.group = copy<uint32_t>(group, n, "group");
     add.mask = copy<uint32_t>(mask, n, "mask");
     add.flags = copy<uint32_t>(flags, n, "flags");
+    add.material = copy<uint16_t>(material, n, "material");
+    add.filter = copy<uint16_t>(filter, n, "filter");
+    add.drag = copy<float>(drag, n, "drag");
+    for (float k : add.drag)
+        if (!(std::isfinite(k) && k >= 0.0f))
+            throw std::invalid_argument("drag is finite and not negative");
     check_finite(add.position, "position");
     check_quaternions(add.orientation, "orientation");
     check_finite(offsets, "shape_offset");
@@ -319,13 +328,17 @@ ShapeId add_convex(World &world, const In<double, nb::shape<-1, 3>> &points,
 }
 
 ShapeId add_mesh(World &world, const In<double, nb::shape<-1, 3>> &points,
-                 const In<uint32_t, nb::shape<-1, 3>> &triangles) {
+                 const In<uint32_t, nb::shape<-1, 3>> &triangles, std::optional<Shorts> materials) {
     std::vector<double> vertices(points.data(), points.data() + points.size());
     std::vector<uint32_t> indices(triangles.data(), triangles.data() + triangles.size());
+    std::vector<uint16_t> palette;
+    if (materials)
+        palette = copy<uint16_t>(*materials, triangles.shape(0), "materials");
     JPH::RefConst<JPH::Shape> shape;
     {
         nb::gil_scoped_release release;
-        shape = make_mesh(vertices.data(), points.shape(0), indices.data(), triangles.shape(0));
+        shape = make_mesh(vertices.data(), points.shape(0), indices.data(), triangles.shape(0),
+                          palette.empty() ? nullptr : palette.data());
     }
     return world.core().shapes().add(std::move(shape), ShapeKind::Mesh);
 }
@@ -688,6 +701,219 @@ uint64_t character_ops(World &world, const Uids &ids, const Bytes &ops, const By
     return world.core().submit(Command(std::move(batch)), at_tick);
 }
 
+
+// -- joints ---------------------------------------------------------------------------
+
+using Sixes = In<double, nb::shape<-1, 6>>;
+using SixBytes = In<uint8_t, nb::shape<-1, 6>>;
+using FloatPairs = In<float, nb::shape<-1, 2>>;
+
+std::pair<nb::ndarray<nb::numpy, uint32_t, nb::shape<-1>>, uint64_t> add_joints(
+    World &world, const Bytes &kind, const Uids &a, const Uids &b, const Vec3s &anchor, const Vec3s &to_anchor,
+    const Vec3s &axis, const Vec3s &axis2, const Vec3s &axis3, const Sixes &lower, const Sixes &upper,
+    const FloatPairs &spring, const Floats &friction, const SixBytes &motor_mode, const Sixes &motor_target,
+    const Sixes &motor_max, const FloatPairs &motor_spring, const Floats &break_force, const Floats &break_torque,
+    const Bytes &collide, uint64_t at_tick) {
+    const size_t n = kind.shape(0);
+    const auto k = copy<uint8_t>(kind, n, "kind");
+    const auto ua = copy<uint32_t>(a, n, "a");
+    const auto ub = copy<uint32_t>(b, n, "b");
+    const auto p0 = copy<double>(anchor, n, "anchor"), p1 = copy<double>(to_anchor, n, "to_anchor");
+    const auto x0 = copy<double>(axis, n, "axis"), x1 = copy<double>(axis2, n, "axis2"),
+               x2 = copy<double>(axis3, n, "axis3");
+    const auto lo = copy<double>(lower, n, "lower"), hi = copy<double>(upper, n, "upper");
+    const auto sp = copy<float>(spring, n, "spring"), fr = copy<float>(friction, n, "friction");
+    const auto mm = copy<uint8_t>(motor_mode, n, "motor_mode");
+    const auto mt = copy<double>(motor_target, n, "motor_target"), mx = copy<double>(motor_max, n, "motor_max");
+    const auto ms = copy<float>(motor_spring, n, "motor_spring");
+    const auto bf = copy<float>(break_force, n, "break_force"), bt = copy<float>(break_torque, n, "break_torque");
+    const auto co = copy<uint8_t>(collide, n, "collide");
+    for (const auto *values : {&p1, &x0, &x1, &x2, &mt})
+        check_finite(*values, "joint vectors and motor targets");
+    for (size_t i = 0; i < n; ++i) {
+        // A slider's anchor may be NaN: the body's origin when the joint is made.
+        const bool unset = k[i] == uint8_t(JointKind::Slider) && std::isnan(p0[3 * i]) &&
+                           std::isnan(p0[3 * i + 1]) && std::isnan(p0[3 * i + 2]);
+        for (size_t c = 0; c < 3 && !unset; ++c)
+            if (!std::isfinite(p0[3 * i + c]))
+                throw std::invalid_argument("joint anchor holds a value that is not finite");
+    }
+    AddJoints add;
+    add.joints.resize(n);
+    for (size_t i = 0; i < n; ++i) {
+        const std::string row = " (row " + std::to_string(i) + ")";
+        JointDesc &d = add.joints[i];
+        if (k[i] > uint8_t(JointKind::Motor))
+            throw std::invalid_argument("unknown joint kind " + std::to_string(k[i]) + row);
+        if (ub[i] == kNoBody || ua[i] == ub[i])
+            throw std::invalid_argument("a joint holds a body to another body or to the world (0)" + row);
+        d.kind = k[i];
+        d.a = ua[i];
+        d.b = ub[i];
+        for (size_t c = 0; c < 3; ++c) {
+            d.anchor[c] = p0[3 * i + c];
+            d.to_anchor[c] = p1[3 * i + c];
+            d.axis[c] = x0[3 * i + c];
+            d.axis2[c] = x1[3 * i + c];
+            d.axis3[c] = x2[3 * i + c];
+        }
+        for (size_t c = 0; c < 6; ++c) {
+            d.lower[c] = lo[6 * i + c];
+            d.upper[c] = hi[6 * i + c];
+            if (std::isnan(d.lower[c]) || std::isnan(d.upper[c]) || d.lower[c] > d.upper[c])
+                throw std::invalid_argument("joint limits are lower <= upper" + row);
+            d.motor_mode[c] = mm[6 * i + c];
+            if (d.motor_mode[c] > uint8_t(MotorMode::Position))
+                throw std::invalid_argument("unknown motor mode" + row);
+            d.motor_target[c] = mt[6 * i + c];
+            d.motor_max[c] = mx[6 * i + c];
+            if (!(d.motor_max[c] >= 0.0))
+                throw std::invalid_argument("a motor's most force or torque is not negative" + row);
+        }
+        for (size_t c = 0; c < 2; ++c) {
+            d.spring[c] = sp[2 * i + c];
+            d.motor_spring[c] = ms[2 * i + c];
+        }
+        d.friction = fr[i];
+        d.break_force = bf[i];
+        d.break_torque = bt[i];
+        d.collide = co[i] != 0;
+        for (float v : {d.spring[0], d.spring[1], d.motor_spring[0], d.motor_spring[1], d.friction, d.break_force,
+                        d.break_torque})
+            if (!(std::isfinite(v) && v >= 0.0f))
+                throw std::invalid_argument("joint springs, friction and break limits are finite and not negative" + row);
+    }
+    JointId first = 0;
+    const uint64_t seq = world.core().submit(Command(std::move(add)), at_tick, nullptr, &first);
+    std::vector<uint32_t> ids(n);
+    for (size_t i = 0; i < n; ++i)
+        ids[i] = first + uint32_t(i);
+    return {owned<uint32_t, nb::shape<-1>>(std::move(ids), {n}), seq};
+}
+
+uint64_t set_joint_motors(World &world, const Uids &ids, const Bytes &axis, const Bytes &mode, const Doubles &target,
+                          const Doubles &max, uint64_t at_tick) {
+    const size_t n = ids.shape(0);
+    SetJointMotors set{uids(ids), copy<uint8_t>(axis, n, "axis"), copy<uint8_t>(mode, n, "mode"),
+                       copy<double>(target, n, "target"), copy<double>(max, n, "max")};
+    for (size_t i = 0; i < n; ++i) {
+        if (set.axis[i] > 5)
+            throw std::invalid_argument("a motor axis is 0 to 5");
+        if (set.mode[i] > uint8_t(MotorMode::Position) && set.mode[i] != 0xff)
+            throw std::invalid_argument("unknown motor mode");
+        if (std::isinf(set.target[i]) || set.max[i] < 0.0)
+            throw std::invalid_argument("a motor target is finite and its most force not negative");
+    }
+    return world.core().submit(Command(std::move(set)), at_tick);
+}
+
+// -- materials, filters, zones, drag, tracks -------------------------------------------
+
+uint64_t set_material_table(World &world, const Floats &static_friction, const Floats &dynamic_friction,
+                            const Floats &restitution, const Bytes &friction_combine, const Bytes &restitution_combine,
+                            const In<float, nb::shape<-1, -1, 3>> &pairs, float static_speed, uint64_t at_tick) {
+    const size_t m = static_friction.shape(0);
+    SetMaterialTable set;
+    set.rows.resize(m);
+    const auto sf = copy<float>(static_friction, m, "static_friction");
+    const auto df = copy<float>(dynamic_friction, m, "dynamic_friction");
+    const auto re = copy<float>(restitution, m, "restitution");
+    const auto fc = copy<uint8_t>(friction_combine, m, "friction_combine");
+    const auto rc = copy<uint8_t>(restitution_combine, m, "restitution_combine");
+    for (size_t i = 0; i < m; ++i) {
+        for (float v : {sf[i], df[i], re[i]})
+            if (!(std::isfinite(v) && v >= 0.0f))
+                throw std::invalid_argument("friction and restitution are finite and not negative");
+        if (fc[i] > uint8_t(Combine::Maximum) || rc[i] > uint8_t(Combine::Maximum))
+            throw std::invalid_argument("unknown combine mode");
+        set.rows[i] = MaterialRow{sf[i], df[i], re[i], fc[i], rc[i]};
+    }
+    if (pairs.size() != 0 && (pairs.shape(0) != m || pairs.shape(1) != m))
+        throw std::invalid_argument("the pair table is (M, M, 3) for M materials");
+    set.pairs.assign(pairs.data(), pairs.data() + pairs.size());
+    if (!(std::isfinite(static_speed) && static_speed >= 0.0f))
+        throw std::invalid_argument("static_speed is finite and not negative");
+    set.static_speed = static_speed;
+    return world.core().submit(Command(std::move(set)), at_tick);
+}
+
+uint64_t set_gravity_zones(World &world, const Bytes &shape, const Bytes &field, const Vec3s &position,
+                           const Quats &rotation, const Vec3s &half, const Words &shape_id, const Doubles &gravity,
+                           const Vec3s &direction, const Vec3s &center, const In<int32_t, nb::shape<-1>> &priority,
+                           const Bytes &replace, const Bytes &stop, uint64_t at_tick) {
+    const size_t n = shape.shape(0);
+    const auto sh = copy<uint8_t>(shape, n, "shape"), fi = copy<uint8_t>(field, n, "field");
+    const auto po = copy<double>(position, n, "position"), ro = copy<double>(rotation, n, "rotation");
+    const auto ha = copy<double>(half, n, "half");
+    const auto id = copy<uint32_t>(shape_id, n, "shape_id");
+    const auto gr = copy<double>(gravity, n, "gravity");
+    const auto di = copy<double>(direction, n, "direction"), ce = copy<double>(center, n, "center");
+    const auto pr = copy<int32_t>(priority, n, "priority");
+    const auto rp = copy<uint8_t>(replace, n, "replace"), st = copy<uint8_t>(stop, n, "stop");
+    for (const auto *values : {&po, &ha, &gr, &di, &ce})
+        check_finite(*values, "zone values");
+    check_quaternions(ro, "rotation");
+    SetGravityZones set;
+    set.zones.resize(n);
+    for (size_t i = 0; i < n; ++i) {
+        Zone &z = set.zones[i];
+        if (sh[i] > uint8_t(ZoneShape::Shape) || fi[i] > uint8_t(ZoneField::Point))
+            throw std::invalid_argument("unknown zone shape or field");
+        z.shape = sh[i];
+        z.field = fi[i];
+        for (size_t c = 0; c < 3; ++c) {
+            z.position[c] = po[3 * i + c];
+            z.half[c] = ha[3 * i + c];
+            z.direction[c] = di[3 * i + c];
+            z.center[c] = ce[3 * i + c];
+        }
+        for (size_t c = 0; c < 4; ++c)
+            z.rotation[c] = ro[4 * i + c];
+        if (z.shape == uint8_t(ZoneShape::Shape)) {
+            z.region = world.core().shapes().find(id[i]).first;
+            if (z.region == nullptr)
+                throw std::invalid_argument("shape id " + std::to_string(id[i]) + " names no shape of this world");
+        }
+        z.gravity = gr[i];
+        z.priority = pr[i];
+        z.replace = rp[i] != 0;
+        z.stop = st[i] != 0;
+    }
+    return world.core().submit(Command(std::move(set)), at_tick);
+}
+
+uint64_t set_tracks(World &world, const Uids &ids, const Doubles &times, const Vec3s &positions,
+                    const Quats &rotations, bool loop, uint64_t at_tick) {
+    SetTracks set;
+    set.uids = uids(ids);
+    const size_t k = times.shape(0);
+    set.track.times = copy<double>(times, k, "times");
+    set.track.positions = copy<double>(positions, k, "positions");
+    set.track.rotations = copy<double>(rotations, k, "rotations");
+    set.track.loop = loop;
+    check_finite(set.track.times, "times");
+    check_finite(set.track.positions, "positions");
+    if (k)
+        check_quaternions(set.track.rotations, "rotations");
+    for (size_t i = 1; i < k; ++i)
+        if (!(set.track.times[i] > set.track.times[i - 1]))
+            throw std::invalid_argument("track times ascend");
+    return world.core().submit(Command(std::move(set)), at_tick);
+}
+
+uint64_t move_kinematic(World &world, const Uids &ids, const Vec3s &positions, const Quats &rotations,
+                        uint64_t at_tick) {
+    const size_t n = ids.shape(0);
+    MoveKinematic move{uids(ids), copy<double>(positions, n, "positions"), copy<double>(rotations, n, "rotations")};
+    check_finite(move.positions, "positions");
+    check_quaternions(move.rotations, "rotations");
+    if (world.core().on_world_thread()) {
+        world.core().move_kinematic_now(std::move(move));
+        return 0;
+    }
+    return world.core().submit(Command(std::move(move)), at_tick);
+}
+
 template <typename T, typename Shape>
 nb::ndarray<nb::numpy, const T, Shape> char_view(const Snapshot &s, const std::vector<T> &values, size_t width) {
     if (width == 1)
@@ -795,6 +1021,53 @@ void bind_world(nb::module_ &m) {
             [](const Snapshot &s) { return char_view<float, nb::shape<-1>>(s, s.buffer->char_height, 1); },
             nb::rv_policy::reference_internal)
         .def_prop_ro(
+            "character_previous",
+            [](const Snapshot &s) { return char_view<double, nb::shape<-1, 3>>(s, s.buffer->char_previous, 3); },
+            nb::rv_policy::reference_internal)
+        .def_prop_ro(
+            "character_eye",
+            [](const Snapshot &s) { return char_view<double, nb::shape<-1, 3>>(s, s.buffer->char_eye, 3); },
+            nb::rv_policy::reference_internal)
+        .def_prop_ro(
+            "character_ground_material",
+            [](const Snapshot &s) {
+                return char_view<uint16_t, nb::shape<-1>>(s, s.buffer->char_ground_material, 1);
+            },
+            nb::rv_policy::reference_internal)
+        .def_prop_ro(
+            "character_flags",
+            [](const Snapshot &s) { return char_view<uint8_t, nb::shape<-1>>(s, s.buffer->char_flags, 1); },
+            nb::rv_policy::reference_internal)
+        .def_prop_ro("joint_count", [](const Snapshot &s) { return s.buffer->joints; })
+        .def_prop_ro(
+            "joint_id",
+            [](const Snapshot &s) { return view<uint32_t, nb::shape<-1>>(s.buffer->joint_id, {s.buffer->joints}); },
+            nb::rv_policy::reference_internal)
+        .def_prop_ro(
+            "joint_kind",
+            [](const Snapshot &s) { return view<uint8_t, nb::shape<-1>>(s.buffer->joint_kind, {s.buffer->joints}); },
+            nb::rv_policy::reference_internal)
+        .def_prop_ro(
+            "joint_state",
+            [](const Snapshot &s) { return view<uint8_t, nb::shape<-1>>(s.buffer->joint_state, {s.buffer->joints}); },
+            nb::rv_policy::reference_internal)
+        .def_prop_ro(
+            "joint_value",
+            [](const Snapshot &s) { return view<float, nb::shape<-1>>(s.buffer->joint_value, {s.buffer->joints}); },
+            nb::rv_policy::reference_internal)
+        .def_prop_ro(
+            "joint_value2",
+            [](const Snapshot &s) { return view<float, nb::shape<-1>>(s.buffer->joint_value2, {s.buffer->joints}); },
+            nb::rv_policy::reference_internal)
+        .def_prop_ro(
+            "joint_force",
+            [](const Snapshot &s) { return view<float, nb::shape<-1>>(s.buffer->joint_force, {s.buffer->joints}); },
+            nb::rv_policy::reference_internal)
+        .def_prop_ro(
+            "joint_torque",
+            [](const Snapshot &s) { return view<float, nb::shape<-1>>(s.buffer->joint_torque, {s.buffer->joints}); },
+            nb::rv_policy::reference_internal)
+        .def_prop_ro(
             "changed",
             [](const Snapshot &s) {
                 return view<uint32_t, nb::shape<-1>>(s.buffer->changed, {s.buffer->changed.size()});
@@ -809,7 +1082,7 @@ void bind_world(nb::module_ &m) {
                int threads, uint32_t max_bodies, uint32_t max_body_pairs,
                uint32_t max_contact_constraints, size_t event_capacity, bool allow_sleeping,
                float time_before_sleep, float sleep_velocity, float min_velocity_for_restitution,
-               int collision_steps, uint32_t temp_allocator_mb) {
+               int collision_steps, uint32_t temp_allocator_mb, float static_friction_speed) {
                 if (!(std::isfinite(tick_hz) && tick_hz > 0.0))
                     throw std::invalid_argument("tick_hz is positive");
                 if (!(std::isfinite(max_catch_up) && max_catch_up >= 0.0))
@@ -835,6 +1108,9 @@ void bind_world(nb::module_ &m) {
                 settings.min_velocity_for_restitution = min_velocity_for_restitution;
                 settings.collision_steps = collision_steps;
                 settings.temp_allocator_mb = temp_allocator_mb;
+                if (!(std::isfinite(static_friction_speed) && static_friction_speed >= 0.0f))
+                    throw std::invalid_argument("static_friction_speed is finite and not negative");
+                settings.static_friction_speed = static_friction_speed;
                 new (self) World(settings);
             },
             nb::kw_only(), nb::arg("tick_hz") = 120.0, nb::arg("max_catch_up") = 0.1,
@@ -843,7 +1119,8 @@ void bind_world(nb::module_ &m) {
             nb::arg("max_contact_constraints") = 65536, nb::arg("event_capacity") = 65536,
             nb::arg("allow_sleeping") = true, nb::arg("time_before_sleep") = 0.5f,
             nb::arg("sleep_velocity").sig("0.03") = 0.03f, nb::arg("min_velocity_for_restitution") = 1.0f,
-            nb::arg("collision_steps") = 1, nb::arg("temp_allocator_mb") = 16)
+            nb::arg("collision_steps") = 1, nb::arg("temp_allocator_mb") = 16,
+            nb::arg("static_friction_speed").sig("0.05") = 0.05f)
         .def("add_bodies", &add_bodies, nb::arg("position"), nb::arg("orientation"),
              nb::arg("shape_kind"), nb::arg("shape_params"), nb::arg("shape_id"),
              nb::arg("scale"), nb::arg("shape_offset"), nb::arg("shape_rotation"),
@@ -851,8 +1128,8 @@ void bind_world(nb::module_ &m) {
              nb::arg("density"), nb::arg("friction"), nb::arg("restitution"),
              nb::arg("linear_damping"), nb::arg("angular_damping"), nb::arg("gravity_factor"),
              nb::arg("linear_velocity"), nb::arg("angular_velocity"), nb::arg("group"),
-             nb::arg("mask"), nb::arg("flags"), nb::arg("at_tick") = 0,
-             "Queue bodies to add; return their uids and the batch's sequence number.")
+             nb::arg("mask"), nb::arg("flags"), nb::arg("material"), nb::arg("filter"), nb::arg("drag"),
+             nb::arg("at_tick") = 0, "Queue bodies to add; return their uids and the batch's sequence number.")
         .def("swap_bodies", &swap_bodies, nb::arg("remove"), nb::arg("position"), nb::arg("orientation"),
              nb::arg("shape_kind"), nb::arg("shape_params"), nb::arg("shape_id"),
              nb::arg("scale"), nb::arg("shape_offset"), nb::arg("shape_rotation"),
@@ -860,7 +1137,8 @@ void bind_world(nb::module_ &m) {
              nb::arg("density"), nb::arg("friction"), nb::arg("restitution"),
              nb::arg("linear_damping"), nb::arg("angular_damping"), nb::arg("gravity_factor"),
              nb::arg("linear_velocity"), nb::arg("angular_velocity"), nb::arg("group"),
-             nb::arg("mask"), nb::arg("flags"), nb::arg("at_tick") = 0,
+             nb::arg("mask"), nb::arg("flags"), nb::arg("material"), nb::arg("filter"), nb::arg("drag"),
+             nb::arg("at_tick") = 0,
              "Queue removing bodies and adding others in one tick; return the new uids and the sequence number.")
         .def("raycast", &raycast_one, nb::arg("origin"), nb::arg("direction"), nb::arg("max_distance"),
              nb::arg("group"), nb::arg("mask"), nb::arg("exclude"), nb::arg("triggers"), nb::arg("characters"),
@@ -897,7 +1175,7 @@ void bind_world(nb::module_ &m) {
             nb::arg("id"), nb::arg("ignore"), nb::arg("at_tick") = 0)
         .def("add_convex", &add_convex, nb::arg("points"), nb::arg("max_convex_radius"),
              nb::arg("hull_tolerance"), "Build and register a convex hull; return its shape id.")
-        .def("add_mesh", &add_mesh, nb::arg("points"), nb::arg("triangles"),
+        .def("add_mesh", &add_mesh, nb::arg("points"), nb::arg("triangles"), nb::arg("materials").none() = nb::none(),
              "Build and register a triangle mesh; return its shape id.")
         .def("add_heightfield", &add_heightfield, nb::arg("heights"), nb::arg("origin"),
              nb::arg("spacing"), nb::arg("block_size"), nb::arg("bits_per_sample"),
@@ -1007,6 +1285,87 @@ void bind_world(nb::module_ &m) {
                 return w.core().submit(Command(std::move(set)), at_tick);
             },
             nb::arg("uids"), nb::arg("friction"), nb::arg("restitution"), nb::arg("at_tick") = 0)
+        .def("add_joints", &add_joints, nb::arg("kind"), nb::arg("a"), nb::arg("b"), nb::arg("anchor"),
+             nb::arg("to_anchor"), nb::arg("axis"), nb::arg("axis2"), nb::arg("axis3"), nb::arg("lower"),
+             nb::arg("upper"), nb::arg("spring"), nb::arg("friction"), nb::arg("motor_mode"),
+             nb::arg("motor_target"), nb::arg("motor_max"), nb::arg("motor_spring"), nb::arg("break_force"),
+             nb::arg("break_torque"), nb::arg("collide"), nb::arg("at_tick") = 0,
+             "Queue joints; return their ids and the batch's sequence number.")
+        .def(
+            "remove_joints",
+            [](World &w, const Uids &ids, uint64_t at_tick) {
+                return w.core().submit(Command(RemoveJoints{uids(ids)}), at_tick);
+            },
+            nb::arg("ids"), nb::arg("at_tick") = 0)
+        .def("set_joint_motors", &set_joint_motors, nb::arg("ids"), nb::arg("axis"), nb::arg("mode"),
+             nb::arg("target"), nb::arg("max"), nb::arg("at_tick") = 0)
+        .def(
+            "set_joints_enabled",
+            [](World &w, const Uids &ids, const Bytes &enabled, uint64_t at_tick) {
+                SetJointsEnabled set{uids(ids), copy<uint8_t>(enabled, ids.shape(0), "enabled")};
+                return w.core().submit(Command(std::move(set)), at_tick);
+            },
+            nb::arg("ids"), nb::arg("enabled"), nb::arg("at_tick") = 0)
+        .def("set_material_table", &set_material_table, nb::arg("static_friction"), nb::arg("dynamic_friction"),
+             nb::arg("restitution"), nb::arg("friction_combine"), nb::arg("restitution_combine"), nb::arg("pairs"),
+             nb::arg("static_speed"), nb::arg("at_tick") = 0)
+        .def(
+            "set_body_materials",
+            [](World &w, const Uids &ids, const Shorts &material, uint64_t at_tick) {
+                SetBodyMaterials set{uids(ids), copy<uint16_t>(material, ids.shape(0), "material")};
+                return w.core().submit(Command(std::move(set)), at_tick);
+            },
+            nb::arg("uids"), nb::arg("material"), nb::arg("at_tick") = 0)
+        .def(
+            "set_filter_table",
+            [](World &w, const In<uint8_t, nb::shape<-1, -1>> &table, uint64_t at_tick) {
+                const size_t f = table.shape(0);
+                if (table.shape(1) != f || f > 65535)
+                    throw std::invalid_argument("the filter table is (F, F) with F under 65536");
+                SetFilterTable set{uint32_t(f), std::vector<uint8_t>(table.data(), table.data() + table.size())};
+                return w.core().submit(Command(std::move(set)), at_tick);
+            },
+            nb::arg("table"), nb::arg("at_tick") = 0)
+        .def(
+            "set_body_filters",
+            [](World &w, const Uids &ids, const Shorts &filter, uint64_t at_tick) {
+                SetBodyFilters set{uids(ids), copy<uint16_t>(filter, ids.shape(0), "filter")};
+                return w.core().submit(Command(std::move(set)), at_tick);
+            },
+            nb::arg("uids"), nb::arg("filter"), nb::arg("at_tick") = 0)
+        .def("set_gravity_zones", &set_gravity_zones, nb::arg("shape"), nb::arg("field"), nb::arg("position"),
+             nb::arg("rotation"), nb::arg("half"), nb::arg("shape_id"), nb::arg("gravity"), nb::arg("direction"),
+             nb::arg("center"), nb::arg("priority"), nb::arg("replace"), nb::arg("stop"), nb::arg("at_tick") = 0)
+        .def(
+            "set_drag",
+            [](World &w, const Uids &ids, const Floats &drag, uint64_t at_tick) {
+                SetDrag set{uids(ids), copy<float>(drag, ids.shape(0), "drag")};
+                for (float k : set.drag)
+                    if (!(std::isfinite(k) && k >= 0.0f))
+                        throw std::invalid_argument("drag is finite and not negative");
+                return w.core().submit(Command(std::move(set)), at_tick);
+            },
+            nb::arg("uids"), nb::arg("drag"), nb::arg("at_tick") = 0)
+        .def("set_tracks", &set_tracks, nb::arg("uids"), nb::arg("times"), nb::arg("positions"),
+             nb::arg("rotations"), nb::arg("loop"), nb::arg("at_tick") = 0)
+        .def("move_kinematic", &move_kinematic, nb::arg("uids"), nb::arg("positions"), nb::arg("rotations"),
+             nb::arg("at_tick") = 0,
+             "Move kinematic bodies to poses by the end of a tick: this one from a world callback, else the next.")
+        .def(
+            "set_drivers",
+            [](World &w, nb::object fn) {
+                CallbackSet &c = w.core().callbacks();
+                c.set(c.drivers, c.has_drivers, std::move(fn));
+                w.core().poke();
+            },
+            nb::arg("fn").none())
+        .def(
+            "set_contact_filter",
+            [](World &w, nb::object fn) {
+                CallbackSet &c = w.core().callbacks();
+                c.set(c.contact_filter, c.has_contact_filter, std::move(fn));
+            },
+            nb::arg("fn").none())
         .def("start", [](World &w) { w.core().start(); }, nb::call_guard<nb::gil_scoped_release>())
         .def("stop", [](World &w) { w.core().stop(); }, nb::call_guard<nb::gil_scoped_release>())
         .def(

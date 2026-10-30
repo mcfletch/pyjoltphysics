@@ -4,7 +4,20 @@ from __future__ import annotations
 
 import enum
 
-__all__ = ['BodyFlag', 'EndReason', 'EventKind', 'EventPhase', 'MotionType', 'ShapeKind']
+__all__ = [
+    'BodyFlag',
+    'Combine',
+    'EndReason',
+    'EventKind',
+    'EventPhase',
+    'JointKind',
+    'JointState',
+    'MotionType',
+    'MotorMode',
+    'ShapeKind',
+    'ZoneField',
+    'ZoneShape',
+]
 
 
 class MotionType(enum.IntEnum):
@@ -71,6 +84,9 @@ class BodyFlag(enum.IntFlag):
     SMOOTH_EDGES = 1 << 5
     #: A static mesh or height field without enhanced internal edge removal.
     NO_SMOOTH_EDGES = 1 << 6
+    #: The world's contact filter (:meth:`~pyjoltphysics.World.set_contact_filter`)
+    #: is asked about pairs where both bodies carry this flag.
+    FILTER_CONTACTS = 1 << 7
 
 
 class EventKind(enum.IntEnum):
@@ -84,6 +100,8 @@ class EventKind(enum.IntEnum):
     STATE = 2
     #: A character's record; ``a`` is the character.
     CHARACTER = 3
+    #: A joint's record; ``a`` is the joint id.
+    JOINT = 4
 
 
 class EventPhase(enum.IntEnum):
@@ -104,6 +122,8 @@ class EventPhase(enum.IntEnum):
     DOWN = 8
     #: A character got up.
     UP = 9
+    #: A joint broke; ``approach`` is the force (N) and ``impulse`` the torque (N m) it carried.
+    BREAK = 10
 
 
 class EndReason(enum.IntEnum):
@@ -113,3 +133,76 @@ class EndReason(enum.IntEnum):
     NONE = 0
     #: A body of the pair was removed.
     REMOVED = 1
+
+
+class JointKind(enum.IntEnum):
+    """What a joint holds: Jolt's constraint of each kind."""
+
+    #: Holds the two bodies at the pose they had when it was made.
+    FIXED = 0
+    #: Holds a point of each body together; they turn freely about it.
+    BALL = 1
+    #: Turns about one axis through an anchor.
+    HINGE = 2
+    #: Slides along one axis, without turning.
+    SLIDER = 3
+    #: Holds two points at a distance, or within a range of distances.
+    DISTANCE = 4
+    #: Each of six axes (translation x, y, z, rotation x, y, z of its frame)
+    #: locked, free or limited; universal and two-axis hinges are made of it.
+    SIX_DOF = 5
+    #: X3D's MotorJoint: torques about up to three axes, every step.
+    MOTOR = 6
+
+
+class MotorMode(enum.IntEnum):
+    """What a joint's motor drives towards: Jolt's ``EMotorState``."""
+
+    OFF = 0
+    #: A speed: m/s or rad/s.
+    VELOCITY = 1
+    #: A position: m or rad, reached as a spring of the motor's frequency and damping.
+    POSITION = 2
+
+
+class JointState(enum.IntEnum):
+    """A joint in a snapshot."""
+
+    ACTIVE = 0
+    #: Switched off by :meth:`~pyjoltphysics.World.set_joints_enabled`.
+    DISABLED = 1
+    #: Broken past its force or torque limit and out of the world.
+    BROKEN = 2
+
+
+class Combine(enum.IntEnum):
+    """How two materials' friction or restitution make one; the higher code wins.
+
+    ``DEFAULT`` is Jolt's rule (the geometric mean of the frictions and the
+    larger restitution), which a body without a material uses. The others are
+    the OMI physics material's combine modes.
+    """
+
+    DEFAULT = 0
+    AVERAGE = 1
+    MINIMUM = 2
+    MULTIPLY = 3
+    MAXIMUM = 4
+
+
+class ZoneShape(enum.IntEnum):
+    """The region of a gravity zone."""
+
+    BOX = 0
+    SPHERE = 1
+    #: A registered shape at a pose.
+    SHAPE = 2
+
+
+class ZoneField(enum.IntEnum):
+    """The field of a gravity zone (OMI_physics_gravity's types)."""
+
+    #: Along a direction.
+    DIRECTIONAL = 0
+    #: Towards a centre.
+    POINT = 1

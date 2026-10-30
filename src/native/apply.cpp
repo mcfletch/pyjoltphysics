@@ -72,6 +72,7 @@ void WorldCore::apply(AddBodies &add, uint64_t) {
     size_t statics = 0;
     // Consecutive rows usually share their collision triple.
     uint32_t last_group = 0, last_mask = 0;
+    uint16_t last_filter = 0;
     bool last_moving = false, last_sensor = false, have_layer = false;
     JPH::ObjectLayer layer = 0;
     for (size_t i = 0; i < count; ++i) {
@@ -80,18 +81,21 @@ void WorldCore::apply(AddBodies &add, uint64_t) {
         const JPH::Shape *shape = add.shapes[i].GetPtr();
         const bool moving = motion != Motion::Static;
         const bool sensor = (flags & flag::kSensor) != 0;
+        const uint16_t filter = add.filter[i];
         if (!have_layer || add.group[i] != last_group || add.mask[i] != last_mask ||
-            moving != last_moving || sensor != last_sensor) {
-            layer = layers_.layer(add.group[i], add.mask[i], moving, sensor ? LayerRole::Sensor : LayerRole::Body);
+            moving != last_moving || sensor != last_sensor || filter != last_filter) {
+            layer = layers_.layer(add.group[i], add.mask[i], moving, sensor ? LayerRole::Sensor : LayerRole::Body,
+                                  filter);
             last_group = add.group[i];
             last_mask = add.mask[i];
+            last_filter = filter;
             last_moving = moving;
             last_sensor = sensor;
             have_layer = true;
         }
         JPH::BodyCreationSettings settings(shape, rvec3(add.position, i), quat(add.orientation, i),
                                            to_jolt(motion), layer);
-        settings.mUserData = user_data(add.uids[i], flags);
+        settings.mUserData = user_data(add.uids[i], flags, add.material[i]);
         settings.mIsSensor = (flags & flag::kSensor) != 0;
         // A kinematic sensor meets static and kinematic bodies too.
         settings.mCollideKinematicVsNonDynamic = settings.mIsSensor;
@@ -133,6 +137,8 @@ void WorldCore::apply(AddBodies &add, uint64_t) {
         }
         made.push_back(body->GetID());
         bind_row(add.uids[i], body->GetID());
+        if (add.drag[i] > 0.0f)
+            fields_.drag[body->GetID().GetIndex()] = add.drag[i];
         if (settings.mIsSensor)
             sensors.push_back(body->GetID());
         if (!moving)
@@ -184,6 +190,11 @@ void WorldCore::apply(RemoveBodies &remove, uint64_t index) {
     }
     if (ids.empty())
         return;
+    remove_joints_of(uids, index);
+    for (size_t i = 0; i < ids.size(); ++i) {
+        fields_.drag.erase(ids[i].GetIndex());
+        tracks_.erase(uids[i]);
+    }
     pairs_.remove_bodies(ids, uint32_t(index + 1), tick_events_);
     JPH::BodyInterface &bodies = system_.GetBodyInterfaceNoLock();
     collector_.quiet = true;
@@ -348,5 +359,126 @@ void WorldCore::apply(CharacterOps &ops, uint64_t index) {
 }
 
 void WorldCore::apply(SetCharacterIgnore &set, uint64_t) { characters_->set_ignore(set.id, std::move(set.ignore)); }
+
+void WorldCore::apply(SetBodyMaterials &set, uint64_t) {
+    JPH::BodyInterface &bodies = system_.GetBodyInterfaceNoLock();
+    for (size_t i = 0; i < set.uids.size(); ++i) {
+        const Row *row = find(set.uids[i]);
+        if (row == nullptr)
+            continue;
+        const uint64_t user = bodies.GetUserData(row->id);
+        bodies.SetUserData(row->id, user_data(uid_of(user), flags_of(user), set.material[i]));
+    }
+}
+
+void WorldCore::apply(SetBodyFilters &set, uint64_t) {
+    JPH::BodyInterface &bodies = system_.GetBodyInterfaceNoLock();
+    for (size_t i = 0; i < set.uids.size(); ++i) {
+        const Row *row = find(set.uids[i]);
+        if (row == nullptr)
+            continue;
+        bodies.SetObjectLayer(row->id, layers_.with_filter(bodies.GetObjectLayer(row->id), set.filter[i]));
+        if (bodies.GetMotionType(row->id) != JPH::EMotionType::Static)
+            bodies.ActivateBody(row->id);
+    }
+}
+
+void WorldCore::apply(SetMaterialTable &set, uint64_t) {
+    materials_.rows = std::move(set.rows);
+    materials_.pairs = std::move(set.pairs);
+    materials_.static_speed = set.static_speed;
+}
+
+// Every moving body is woken, so pairs the new table parts or joins are met
+// at the next step.
+void WorldCore::wake_dynamic() {
+    std::vector<JPH::BodyID> ids;
+    ids.reserve(rows_.size());
+    JPH::BodyInterface &bodies = system_.GetBodyInterfaceNoLock();
+    for (const Row &row : rows_)
+        if (bodies.GetMotionType(row.id) == JPH::EMotionType::Dynamic)
+            ids.push_back(row.id);
+    if (!ids.empty())
+        bodies.ActivateBodies(ids.data(), int(ids.size()));
+}
+
+void WorldCore::apply(SetFilterTable &set, uint64_t) {
+    layers_.set_table(set.count, std::move(set.table));
+    wake_dynamic();
+}
+
+void WorldCore::apply(SetGravityZones &set, uint64_t) {
+    std::stable_sort(set.zones.begin(), set.zones.end(),
+                     [](const Zone &a, const Zone &b) { return a.priority < b.priority; });
+    fields_.zones = std::move(set.zones);
+    characters_->set_zones(&fields_.zones);
+    wake_dynamic();
+}
+
+void WorldCore::apply(SetDrag &set, uint64_t) {
+    for (size_t i = 0; i < set.uids.size(); ++i) {
+        const Row *row = find(set.uids[i]);
+        if (row == nullptr)
+            continue;
+        if (set.drag[i] > 0.0f)
+            fields_.drag[row->id.GetIndex()] = set.drag[i];
+        else
+            fields_.drag.erase(row->id.GetIndex());
+    }
+}
+
+void WorldCore::apply(SetTracks &set, uint64_t index) {
+    JPH::BodyInterface &bodies = system_.GetBodyInterfaceNoLock();
+    for (Uid uid : set.uids) {
+        const Row *row = find(uid);
+        if (row == nullptr)
+            continue;
+        if (set.track.times.empty()) {
+            tracks_.erase(uid);
+            continue;
+        }
+        if (bodies.GetMotionType(row->id) != JPH::EMotionType::Kinematic) {
+            ++rejected_;
+            continue;
+        }
+        tracks_[uid] = Tracked{set.track, double(index) * dt_};
+    }
+}
+
+void WorldCore::apply(MoveKinematic &move, uint64_t) { driven_.push_back(std::move(move)); }
+
+void WorldCore::move_kinematic_now(MoveKinematic &&move) { driven_.push_back(std::move(move)); }
+
+// Tracks and Body.drive's targets move their kinematic bodies to where they
+// are at the end of this tick.
+void WorldCore::move_kinematics(uint64_t index) {
+    if (tracks_.empty() && driven_.empty())
+        return;
+    JPH::BodyInterface &bodies = system_.GetBodyInterfaceNoLock();
+    const double end = double(index + 1) * dt_;
+    const auto step = float(dt_);
+    for (const auto &[uid, tracked] : tracks_) {
+        const Row *row = find(uid);
+        if (row == nullptr)
+            continue;
+        JPH::RVec3 position;
+        JPH::Quat rotation;
+        track_pose(tracked.track, end - tracked.start, position, rotation);
+        bodies.MoveKinematic(row->id, position, rotation, step);
+        publisher_.mark(row_of_uid_[uid]);
+    }
+    for (const MoveKinematic &move : driven_) {
+        for (size_t i = 0; i < move.uids.size(); ++i) {
+            const Row *row = find(move.uids[i]);
+            if (row == nullptr || bodies.GetMotionType(row->id) != JPH::EMotionType::Kinematic) {
+                ++rejected_;
+                continue;
+            }
+            bodies.MoveKinematic(row->id, rvec3(move.positions, i), quat(move.rotations, i), step);
+            publisher_.mark(row_of_uid_[move.uids[i]]);
+        }
+    }
+    driven_.clear();
+}
 
 }  // namespace pj

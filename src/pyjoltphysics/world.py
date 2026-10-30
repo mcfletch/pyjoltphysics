@@ -33,19 +33,41 @@ import numpy.typing as npt
 from pyjoltphysics import _native
 from pyjoltphysics.bodies import BodyBatch
 from pyjoltphysics.characters import Character, CharacterCapabilities, CharacterRows
-from pyjoltphysics.enums import MotionType, ShapeKind
+from pyjoltphysics.enums import MotionType, MotorMode, ShapeKind
 from pyjoltphysics.events import as_events
+from pyjoltphysics.fields import GravityZone, Track, zone_arrays
+from pyjoltphysics.joints import Joint, JointRows, joint_arrays
+from pyjoltphysics.materials import MaterialTable
 from pyjoltphysics.queries import ALL_GROUPS, DEFAULT_FILTER, QueryFilter, RayHit, RayHits, ShapeHit
 from pyjoltphysics.settings import WorldSettings
 from pyjoltphysics.shapes import Shape, ShapeInfo
 
-__all__ = ['Snapshot', 'StepCallback', 'EventsCallback', 'World', 'WorldError', 'WorldStopped']
+__all__ = [
+    'ContactFilter',
+    'EventsCallback',
+    'PoseFunction',
+    'Snapshot',
+    'StepCallback',
+    'World',
+    'WorldError',
+    'WorldStopped',
+]
 
 #: ``fn(tick, time)`` on the world thread. For ``before_step`` ``tick`` is the
 #: number of ticks completed; for ``after_step`` it includes the one just run.
 StepCallback = Callable[[int, float], object]
 #: ``fn(events, tick, time)`` on the world thread with the tick's records.
 EventsCallback = Callable[[npt.NDArray[np.void], int, float], object]
+
+#: ``fn(a, b, point, normal, approach)`` on Jolt's job threads, for two bodies
+#: about to touch: ``a < b`` uids, the point (m), the unit normal from ``a`` to
+#: ``b`` and the closing speed (m/s). False lets them pass through each other
+#: until they part; True or None solves them.
+ContactFilter = Callable[
+    [int, int, tuple[float, float, float], tuple[float, float, float], float], object
+]
+#: ``fn(time)`` for :meth:`World.drive`: a position, or ``(position, quaternion)``.
+PoseFunction = Callable[[float], Any]
 
 #: Raised by a wait on a world that was stopped before the wait was met.
 WorldStopped = _native.WorldStopped
@@ -224,6 +246,11 @@ class Snapshot:
         """Every character, as read-only views; see :class:`~pyjoltphysics.CharacterRows`."""
         return CharacterRows(self._native)
 
+    @property
+    def joints(self) -> JointRows:
+        """Every joint, as read-only views; see :class:`~pyjoltphysics.JointRows`."""
+        return JointRows(self._native)
+
     def includes(self, seq: int) -> bool:
         """True when the batch with sequence number ``seq``, and every batch before it, is applied."""
         return self.applied_seq >= seq
@@ -251,6 +278,9 @@ class World:
         # Each Shape object is built once per world; the entry goes with the Shape.
         self._shape_ids: weakref.WeakKeyDictionary[Shape, int] = weakref.WeakKeyDictionary()
         self._shapes_lock = threading.Lock()
+        self._materials = MaterialTable(self._send_materials)
+        self._drivers: dict[int, PoseFunction] = {}
+        self._drivers_lock = threading.Lock()
 
     def __enter__(self) -> World:
         return self
@@ -391,7 +421,9 @@ class World:
         if shape.kind == ShapeKind.MESH:
             assert shape.points is not None and shape.triangles is not None
             return native.add_mesh(
-                np.ascontiguousarray(shape.points), np.ascontiguousarray(shape.triangles)
+                np.ascontiguousarray(shape.points),
+                np.ascontiguousarray(shape.triangles),
+                None if shape.materials is None else np.ascontiguousarray(shape.materials),
             )
         if shape.kind == ShapeKind.HEIGHTFIELD:
             assert shape.heights is not None
@@ -775,6 +807,210 @@ class World:
     def set_character_ignore(self, cid: int, uids: Iterable[int], at_tick: int = 0) -> int:
         """Queue the set of bodies a character passes through."""
         return self._native.set_character_ignore(int(cid), _uids(list(uids)), at_tick)
+
+    # -- joints ------------------------------------------------------------
+
+    def add_joints(
+        self, joints: Sequence[Joint], at_tick: int = 0
+    ) -> tuple[npt.NDArray[np.uint32], int]:
+        """Queue joints; return their ids, assigned now, and the batch's sequence number.
+
+        A joint naming a body that is not in the world when the batch is
+        applied is skipped and counted in ``stats()['rejected']``.
+        """
+        return self._native.add_joints(**joint_arrays(list(joints)), at_tick=at_tick)
+
+    def add_joint(self, joint: Joint, at_tick: int = 0) -> int:
+        """Queue one joint and return its id."""
+        ids, _ = self.add_joints([joint], at_tick)
+        return int(ids[0])
+
+    def remove_joints(self, ids: npt.ArrayLike, at_tick: int = 0) -> int:
+        """Queue taking joints out of the world; each makes an end record."""
+        return self._native.remove_joints(_uids(ids), at_tick)
+
+    def set_joint_motors(
+        self,
+        ids: npt.ArrayLike,
+        mode: MotorMode | int | None,
+        target: npt.ArrayLike = math.nan,
+        max: npt.ArrayLike = math.nan,
+        axis: npt.ArrayLike = 0,
+        at_tick: int = 0,
+    ) -> int:
+        """Queue new motor settings for one axis of each joint; None or NaN leaves a value as it is.
+
+        A MOTOR joint's axis 0 to 2 takes a new torque as its ``target``.
+        """
+        ids_ = _uids(ids)
+        n = len(ids_)
+        return self._native.set_joint_motors(
+            ids_,
+            _column(axis, n, np.uint8, 'axis'),
+            _column(0xFF if mode is None else int(mode), n, np.uint8, 'mode'),
+            _column(target, n, np.float64, 'target'),
+            _column(max, n, np.float64, 'max'),
+            at_tick,
+        )
+
+    def set_joints_enabled(
+        self, ids: npt.ArrayLike, enabled: npt.ArrayLike, at_tick: int = 0
+    ) -> int:
+        """Queue switching joints off (False) or on (True); a broken joint stays broken."""
+        ids_ = _uids(ids)
+        return self._native.set_joints_enabled(
+            ids_, _column(enabled, len(ids_), np.uint8, 'enabled'), at_tick
+        )
+
+    # -- materials and filters ---------------------------------------------
+
+    @property
+    def materials(self) -> MaterialTable:
+        """The world's :class:`~pyjoltphysics.MaterialTable`; each change is sent as a batch."""
+        return self._materials
+
+    def _send_materials(self, table: MaterialTable) -> int:
+        static, dynamic, restitution, fcombine, rcombine, pairs = table.native()
+        return self._native.set_material_table(
+            static,
+            dynamic,
+            restitution,
+            fcombine,
+            rcombine,
+            pairs,
+            self._settings.static_friction_speed,
+        )
+
+    def set_body_materials(
+        self, uids: npt.ArrayLike, material: npt.ArrayLike, at_tick: int = 0
+    ) -> int:
+        """Queue new material indices for bodies; 0 is a body's own friction and restitution."""
+        ids = _uids(uids)
+        return self._native.set_body_materials(
+            ids, _column(material, len(ids), np.uint16, 'material'), at_tick
+        )
+
+    def set_filter_table(self, collides: npt.ArrayLike, at_tick: int = 0) -> int:
+        """Queue the (F, F) table of which collision filters meet; it is made symmetric.
+
+        A body's ``filter`` index outside the table meets every filter. Every
+        moving body is woken, so pairs the table parts or joins are met at once.
+        """
+        table = np.asarray(collides, dtype=bool)
+        if table.ndim != 2 or table.shape[0] != table.shape[1]:
+            raise ValueError('the filter table is (F, F), not %s' % (table.shape,))
+        both = np.ascontiguousarray(table & table.T, dtype=np.uint8)
+        return self._native.set_filter_table(both, at_tick)
+
+    def set_body_filters(
+        self, uids: npt.ArrayLike, filters: npt.ArrayLike, at_tick: int = 0
+    ) -> int:
+        """Queue new collision filter indices for bodies."""
+        ids = _uids(uids)
+        return self._native.set_body_filters(
+            ids, _column(filters, len(ids), np.uint16, 'filters'), at_tick
+        )
+
+    def set_contact_filter(self, fn: ContactFilter | None) -> ContactFilter | None:
+        """Ask ``fn`` about pairs whose bodies both carry ``BodyFlag.FILTER_CONTACTS`` as they first touch.
+
+        ``fn(a, b, point, normal, approach)`` runs on the Jolt job thread that
+        found the pair, inside the step, once per pair: the answer holds until
+        the two part. False lets them pass through each other; True or None
+        solves them. It may submit commands and may not query the world
+        (``RuntimeError``) or wait for it. An exception stops the world, as
+        from any callback. None removes it.
+        """
+        self._native.set_contact_filter(fn)
+        return fn
+
+    # -- gravity zones, drag, kinematic tracks -------------------------------
+
+    def set_gravity_zones(self, zones: Sequence[GravityZone], at_tick: int = 0) -> int:
+        """Queue the world's gravity zones, replacing any it has; every dynamic body is woken."""
+        zones = list(zones)
+        shape_ids = [z.shape_id for z in zones]
+        if any(sid == 0 for z, sid in zip(zones, shape_ids, strict=True) if int(z.shape) == 2):
+            raise ValueError('a shape zone names a shape id')
+        return self._native.set_gravity_zones(**zone_arrays(zones), at_tick=at_tick)
+
+    def set_drag(self, uids: npt.ArrayLike, drag: npt.ArrayLike, at_tick: int = 0) -> int:
+        """Queue quadratic drag coefficients (1/m): a force of ``-k m |v| v``; 0 removes it."""
+        ids = _uids(uids)
+        return self._native.set_drag(ids, _column(drag, len(ids), np.float32, 'drag'), at_tick)
+
+    def set_track(self, uids: npt.ArrayLike, track: Track, at_tick: int = 0) -> int:
+        """Queue kinematic bodies onto ``track``, from the tick that applies the batch.
+
+        Each tick the world moves each body to the track's pose at the end of
+        the tick, so what rides on it is carried. A body that is not kinematic
+        is rejected.
+        """
+        times, positions, rotations = track.native()
+        return self._native.set_tracks(
+            _uids(uids), times, positions, rotations, track.loop, at_tick
+        )
+
+    def clear_tracks(self, uids: npt.ArrayLike, at_tick: int = 0) -> int:
+        """Queue taking bodies off their tracks; they keep the pose they reached."""
+        empty = np.zeros((0, 3))
+        return self._native.set_tracks(
+            _uids(uids), np.zeros(0), empty, np.zeros((0, 4)), False, at_tick
+        )
+
+    def move_kinematic(
+        self,
+        uids: npt.ArrayLike,
+        positions: npt.ArrayLike,
+        orientations: npt.ArrayLike = (0.0, 0.0, 0.0, 1.0),
+        at_tick: int = 0,
+    ) -> int:
+        """Move kinematic bodies to poses by the end of a tick, at the velocity that reaches them.
+
+        From a callback on the world thread the move belongs to the current
+        tick (and the call returns 0); from any other thread it is a batch
+        applied at the next tick.
+        """
+        ids = _uids(uids)
+        n = len(ids)
+        return self._native.move_kinematic(
+            ids,
+            _vectors(positions, n, 3, 'positions'),
+            _vectors(orientations, n, 4, 'orientations'),
+            at_tick,
+        )
+
+    def drive(self, uid: int, pose: PoseFunction | None) -> None:
+        """Move kinematic body ``uid`` along ``pose(time)`` each tick; None stops.
+
+        ``pose`` runs on the world thread before each step with the
+        simulation time at the end of the tick, and returns a position or
+        ``(position, quaternion)``. The body reaches that pose by the end of
+        the tick. A world with a driven body keeps ticking while free-running.
+        """
+        with self._drivers_lock:
+            if pose is None:
+                self._drivers.pop(int(uid), None)
+            else:
+                self._drivers[int(uid)] = pose
+            active = bool(self._drivers)
+        self._native.set_drivers(self._drive_all if active else None)
+
+    def _drive_all(self, _tick: int, time: float) -> None:
+        with self._drivers_lock:
+            drivers = sorted(self._drivers.items())
+        end = time + self._settings.dt
+        uids = np.empty(len(drivers), np.uint32)
+        positions = np.empty((len(drivers), 3))
+        rotations = np.empty((len(drivers), 4))
+        for k, (uid, pose) in enumerate(drivers):
+            got = pose(end)
+            if len(got) == 2 and np.ndim(got[0]) == 1:
+                positions[k], rotations[k] = got[0], got[1]
+            else:
+                positions[k], rotations[k] = got, (0.0, 0.0, 0.0, 1.0)
+            uids[k] = uid
+        self._native.move_kinematic(uids, positions, rotations, 0)
 
     # -- callbacks on the world thread -------------------------------------
 

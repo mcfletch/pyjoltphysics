@@ -8,7 +8,10 @@ NumPy views, and contact, trigger, sleep and wake events as records of
 planes, convex hulls, triangle meshes, height fields and compounds
 (:class:`Shape`), built once and shared by id. Rays, sweeps and overlaps run
 on the calling thread (:meth:`World.raycast`); characters
-(:meth:`World.add_character`) move on the world thread every tick.
+(:meth:`World.add_character`) move on the world thread every tick. Joints
+(:class:`Joint`), materials (:attr:`World.materials`), collision filters,
+gravity zones (:class:`GravityZone`) and kinematic tracks (:class:`Track`)
+are commands like the rest.
 
 >>> import pyjoltphysics
 >>> pyjoltphysics.jolt_version()
@@ -31,13 +34,31 @@ from pyjoltphysics.characters import (
     CharacterState,
     MoveMode,
 )
-from pyjoltphysics.enums import BodyFlag, EndReason, EventKind, EventPhase, MotionType, ShapeKind
+from pyjoltphysics.enums import (
+    BodyFlag,
+    Combine,
+    EndReason,
+    EventKind,
+    EventPhase,
+    JointKind,
+    JointState,
+    MotionType,
+    MotorMode,
+    ShapeKind,
+    ZoneField,
+    ZoneShape,
+)
 from pyjoltphysics.events import EVENT_DTYPE, event_times
+from pyjoltphysics.fields import GravityZone, Track
+from pyjoltphysics.joints import Joint, JointRows, Motor
+from pyjoltphysics.materials import Material, MaterialTable
 from pyjoltphysics.queries import ALL_GROUPS, QueryFilter, RayHit, RayHits, ShapeHit
 from pyjoltphysics.settings import WorldSettings
 from pyjoltphysics.shapes import Shape, ShapeInfo, heightfield_side
 from pyjoltphysics.world import (
+    ContactFilter,
     EventsCallback,
+    PoseFunction,
     Snapshot,
     StepCallback,
     World,
@@ -104,6 +125,8 @@ __all__ = [
     'Snapshot',
     'StepCallback',
     'EventsCallback',
+    'ContactFilter',
+    'PoseFunction',
     # bodies
     'BodyBatch',
     'BodyFlag',
@@ -115,6 +138,22 @@ __all__ = [
     'ShapeRef',
     'heightfield_side',
     'heightfield_tiles',
+    # joints
+    'Joint',
+    'JointKind',
+    'JointRows',
+    'JointState',
+    'Motor',
+    'MotorMode',
+    # materials
+    'Combine',
+    'Material',
+    'MaterialTable',
+    # gravity zones and kinematic tracks
+    'GravityZone',
+    'Track',
+    'ZoneField',
+    'ZoneShape',
     # queries
     'ALL_GROUPS',
     'QueryFilter',

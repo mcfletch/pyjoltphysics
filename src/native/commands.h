@@ -7,6 +7,9 @@
 
 #include "characters.h"
 #include "common.h"
+#include "fields.h"
+#include "joints.h"
+#include "materials.h"
 
 #include <Jolt/Physics/Collision/Shape/Shape.h>
 
@@ -38,6 +41,9 @@ struct AddBodies {
     std::vector<uint32_t> group;
     std::vector<uint32_t> mask;
     std::vector<uint32_t> flags;  // flag::*
+    std::vector<uint16_t> material;  // material index; 0 is the body's own friction and restitution
+    std::vector<uint16_t> filter;    // collision filter index
+    std::vector<float> drag;         // quadratic drag, 1/m
 };
 
 struct RemoveBodies {
@@ -86,6 +92,29 @@ struct SetMaterials {
     std::vector<float> restitution;
 };
 
+struct SetBodyMaterials {
+    std::vector<Uid> uids;
+    std::vector<uint16_t> material;
+};
+
+struct SetBodyFilters {
+    std::vector<Uid> uids;
+    std::vector<uint16_t> filter;
+};
+
+// Replaces the world's material table.
+struct SetMaterialTable {
+    std::vector<MaterialRow> rows;
+    std::vector<float> pairs;
+    float static_speed;
+};
+
+// Replaces the world's (F, F) collides-with table, row major.
+struct SetFilterTable {
+    uint32_t count;
+    std::vector<uint8_t> table;
+};
+
 // Removes bodies and adds others in one tick, as ground streamed around a
 // focus swaps tiles.
 struct SwapBodies {
@@ -95,7 +124,9 @@ struct SwapBodies {
 
 using Command = std::variant<AddBodies, RemoveBodies, SetTransforms, SetVelocities, AddPushes,
                              SetGravity, Activate, SetMotionTypes, SetMaterials, SwapBodies,
-                             AddCharacter, RemoveCharacters, CharacterOps, SetCharacterIgnore>;
+                             AddCharacter, RemoveCharacters, CharacterOps, SetCharacterIgnore, AddJoints,
+                             RemoveJoints, SetJointMotors, SetJointsEnabled, SetBodyMaterials, SetBodyFilters,
+                             SetMaterialTable, SetFilterTable, SetGravityZones, SetDrag, SetTracks, MoveKinematic>;
 
 // The uids a batch takes when it is submitted: one a body it adds, one a character.
 uint32_t uids_wanted(const Command &command);
@@ -113,8 +144,10 @@ class CommandQueue {
 public:
     // Appends the batch and returns its sequence number. For a batch that adds
     // bodies or a character, `uid_count` consecutive uids are assigned first,
-    // written into the batch, and the first is stored in `first_uid`.
-    uint64_t push(Batch &&batch, uint32_t uid_count = 0, Uid *first_uid = nullptr);
+    // written into the batch, and the first is stored in `first_uid`. A batch
+    // that adds joints takes consecutive joint ids, the first stored in
+    // `first_joint`.
+    uint64_t push(Batch &&batch, uint32_t uid_count = 0, Uid *first_uid = nullptr, JointId *first_joint = nullptr);
     // Moves every batch due at `tick` into `out`, in sequence order.
     void take_due(uint64_t tick, std::vector<Batch> &out);
     bool empty() const;
@@ -125,6 +158,7 @@ private:
     std::deque<Batch> queue_;
     uint64_t seq_ = 0;
     Uid next_uid_ = 1;
+    JointId next_joint_ = 1;
 };
 
 }  // namespace pj

@@ -43,6 +43,9 @@ class WorldSettings:
     #: Megabytes Jolt allocates up front for one step's scratch memory; a step
     #: that needs more allocates the rest from the heap.
     temp_allocator_mb: int = 16
+    #: m/s of sliding at a contact below which a material's static friction
+    #: holds; above it the dynamic friction acts.
+    static_friction_speed: float = 0.05
     #: Body damping where a :class:`~pyjoltphysics.BodyBatch` names none, 1/s.
     linear_damping: float = 0.0
     angular_damping: float = 0.0

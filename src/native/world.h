@@ -40,6 +40,7 @@
 #include <set>
 #include <shared_mutex>
 #include <thread>
+#include <unordered_map>
 #include <vector>
 
 namespace pj {
@@ -59,6 +60,7 @@ struct WorldSettings {
     float min_velocity_for_restitution = 1.0f;  // m/s
     int collision_steps = 1;
     uint32_t temp_allocator_mb = 16;
+    float static_friction_speed = 0.05f;  // m/s of sliding below which a material's static friction holds
 };
 
 // A callback raised; the world has stopped and keeps the exception.
@@ -128,7 +130,7 @@ private:
     std::condition_variable open_;
 };
 
-class WorldCore : public std::enable_shared_from_this<WorldCore> {
+class WorldCore : public std::enable_shared_from_this<WorldCore>, public ContactFilterHost {
 public:
     explicit WorldCore(const WorldSettings &settings);
     ~WorldCore();
@@ -139,7 +141,7 @@ public:
 
     // -- commands: any thread, never waits for the world ---------------------
     // Returns the batch's sequence number; an add also returns its first uid.
-    uint64_t submit(Command &&command, uint64_t at_tick, Uid *first_uid = nullptr);
+    uint64_t submit(Command &&command, uint64_t at_tick, Uid *first_uid = nullptr, JointId *first_joint = nullptr);
     uint64_t submitted_seq() const { return queue_.last_seq(); }
 
     // -- the thread: callers release the GIL ---------------------------------
@@ -162,6 +164,16 @@ public:
     void reset_stats();
 
     ShapeLibrary &shapes() { return shapes_; }
+
+    // -- the world thread, inside a callback ---------------------------------
+    // Kinematic targets for the end of the current tick, from Body.drive's
+    // callables; applied after before_step.
+    void move_kinematic_now(MoveKinematic &&move);
+
+    // -- the contact filter: Jolt's job threads ------------------------------
+    // Asks the Python contact filter about a pair; true solves it.
+    bool solve_pair(const JPH::Body &body1, const JPH::Body &body2, JPH::RVec3Arg base,
+                    const JPH::CollideShapeResult &result) override;
 
     // -- queries: any thread; callers release the GIL ------------------------
     void raycast(const double *origins, const double *directions, size_t count, double max_distance,
@@ -226,6 +238,30 @@ private:
     void apply(RemoveCharacters &remove, uint64_t index);
     void apply(CharacterOps &ops, uint64_t index);
     void apply(SetCharacterIgnore &set, uint64_t index);
+    void apply(AddJoints &add, uint64_t index);
+    void apply(RemoveJoints &remove, uint64_t index);
+    void apply(SetJointMotors &set, uint64_t index);
+    void apply(SetJointsEnabled &set, uint64_t index);
+    void apply(SetBodyMaterials &set, uint64_t index);
+    void apply(SetBodyFilters &set, uint64_t index);
+    void apply(SetMaterialTable &set, uint64_t index);
+    void apply(SetFilterTable &set, uint64_t index);
+    void apply(SetGravityZones &set, uint64_t index);
+    void apply(SetDrag &set, uint64_t index);
+    void apply(SetTracks &set, uint64_t index);
+    void apply(MoveKinematic &move, uint64_t index);
+    // joints.cpp
+    void remove_joint(Joint &joint, uint64_t index, uint16_t reason);
+    void remove_joints_of(const std::vector<Uid> &uids, uint64_t index);
+    void joints_after_step(uint64_t tick);
+    void write_joints(SnapshotBuffer &out) const;
+    void activate_motor_joints();
+    void rebuild_torques();
+    // fields: tracks and Body.drive's targets, before the step
+    void move_kinematics(uint64_t index);
+    void wake_dynamic();
+    // The contact filter's verdicts, dropped once a pair parts.
+    void expire_verdicts(uint32_t tick);
     void remove_proxies(std::vector<JPH::BodyID> ids, uint64_t index);
     void wake_under_sensor(const JPH::BodyID &sensor);
     // Rebuilds the broad phase's trees after a large add of static bodies, once
@@ -271,6 +307,30 @@ private:
     std::condition_variable publish_cv_;
     std::shared_ptr<SnapshotBuffer> published_;
     JPH::BodyIDVector active_;
+
+    MaterialTable materials_;
+    FieldListener fields_;
+    std::vector<Joint> joints_;  // ascending id
+    JPH::Ref<JointPairFilter> joint_filter_;
+    struct Tracked {
+        Track track;
+        double start;  // simulation time the track starts at
+    };
+    std::map<Uid, Tracked> tracks_;
+    std::vector<MoveKinematic> driven_;  // targets from Body.drive, this tick
+
+    // The contact filter: verdicts by body pair, and a Python thread state
+    // kept for each job thread that has asked.
+    struct Verdict {
+        bool solve;
+        uint32_t tick;
+    };
+    std::mutex verdict_lock_;
+    std::unordered_map<uint64_t, Verdict> verdicts_;
+    uint32_t verdict_tick_ = 0;
+    std::mutex job_python_lock_;
+    std::unordered_map<std::thread::id, PyThreadState *> job_python_;
+    void release_job_python();
 
     PairTracker pairs_;
     EventRing ring_;

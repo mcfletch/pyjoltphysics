@@ -1,4 +1,7 @@
 #include "shapes.h"
+#include "materials.h"
+
+#include <map>
 
 #include <Jolt/Physics/Collision/Shape/BoxShape.h>
 #include <Jolt/Physics/Collision/Shape/CapsuleShape.h>
@@ -164,7 +167,7 @@ JPH::RefConst<JPH::Shape> make_convex(const double *points, size_t count, float 
 }
 
 JPH::RefConst<JPH::Shape> make_mesh(const double *points, size_t count, const uint32_t *indices,
-                                    size_t triangles) {
+                                    size_t triangles, const uint16_t *materials) {
     if (triangles == 0)
         throw std::invalid_argument("a mesh needs at least one triangle");
     JPH::VertexList vertices;
@@ -175,6 +178,13 @@ JPH::RefConst<JPH::Shape> make_mesh(const double *points, size_t count, const ui
             throw std::invalid_argument("a mesh's points are finite");
         vertices.push_back(JPH::Float3(float(p[0]), float(p[1]), float(p[2])));
     }
+    // Each distinct triangle material is one entry of the mesh's material list.
+    JPH::PhysicsMaterialList palette;
+    std::map<uint16_t, uint32_t> slot_of;
+    if (materials != nullptr)
+        for (size_t t = 0; t < triangles; ++t)
+            if (slot_of.emplace(materials[t], uint32_t(palette.size())).second)
+                palette.push_back(indexed_material(materials[t]));
     JPH::IndexedTriangleList list;
     list.reserve(triangles);
     for (size_t t = 0; t < triangles; ++t) {
@@ -184,10 +194,10 @@ JPH::RefConst<JPH::Shape> make_mesh(const double *points, size_t count, const ui
                 throw std::invalid_argument("triangle " + std::to_string(t) + " names vertex " +
                                             std::to_string(tri[k]) + " of " +
                                             std::to_string(count));
-        list.push_back(JPH::IndexedTriangle(tri[0], tri[1], tri[2], 0));
+        list.push_back(JPH::IndexedTriangle(tri[0], tri[1], tri[2], materials ? slot_of[materials[t]] : 0));
     }
     // The constructor drops degenerate and repeated triangles.
-    JPH::MeshShapeSettings settings(std::move(vertices), std::move(list));
+    JPH::MeshShapeSettings settings(std::move(vertices), std::move(list), std::move(palette));
     if (settings.mIndexedTriangles.empty())
         throw std::invalid_argument("every triangle of the mesh is degenerate");
     return created(settings.Create(), "mesh");

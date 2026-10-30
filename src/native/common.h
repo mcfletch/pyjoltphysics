@@ -37,18 +37,22 @@ constexpr uint32_t kSmoothEdges = 1u << 5;  // Jolt's enhanced internal edge rem
 // A static mesh or height field has enhanced internal edge removal unless it
 // carries this flag.
 constexpr uint32_t kNoSmoothEdges = 1u << 6;
-constexpr uint32_t kAll = (1u << 7) - 1;
+// The world's contact filter is asked about pairs where both bodies carry it.
+constexpr uint32_t kFilterContacts = 1u << 7;
+constexpr uint32_t kAll = (1u << 8) - 1;
 // A character's proxy body; set by the world, never by a batch.
 constexpr uint32_t kCharacter = 1u << 8;
 }  // namespace flag
 
-// Jolt's body user data: the uid in the low 32 bits and the flags above it,
-// so a contact listener reads both without a table lookup.
-inline uint64_t user_data(Uid uid, uint32_t flags) {
-    return uint64_t(uid) | (uint64_t(flags) << 32);
+// Jolt's body user data: the uid in the low 32 bits, the flags in the next 16
+// and the material index in the top 16, so a contact listener reads all three
+// without a table lookup.
+inline uint64_t user_data(Uid uid, uint32_t flags, uint16_t material = 0) {
+    return uint64_t(uid) | (uint64_t(flags & 0xffffu) << 32) | (uint64_t(material) << 48);
 }
 inline Uid uid_of(uint64_t user) { return Uid(user & 0xffffffffu); }
-inline uint32_t flags_of(uint64_t user) { return uint32_t(user >> 32); }
+inline uint32_t flags_of(uint64_t user) { return uint32_t(user >> 32) & 0xffffu; }
+inline uint16_t material_bits_of(uint64_t user) { return uint16_t(user >> 48); }
 
 // Jolt's allocator hooks, factory and type registry are process-wide and are
 // set up once, by whichever thread first needs them.

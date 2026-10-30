@@ -55,6 +55,8 @@ void raise_max(std::atomic<uint64_t> &target, uint64_t value) {
 
 WorldCore::QueryLock::QueryLock(WorldCore &world) : lock_(world.world_lock_, std::defer_lock) {
     world.check();
+    if (in_contact_filter)
+        throw std::runtime_error("a contact filter runs inside the step and cannot query the world");
     if (world.on_world_thread())
         return;
     const auto start = Clock::now();

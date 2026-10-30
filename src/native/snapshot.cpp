@@ -29,6 +29,21 @@ void SnapshotBuffer::resize_characters(uint32_t count) {
     char_landing.resize(count);
     char_landed_tick.resize(count);
     char_height.resize(count);
+    char_previous.resize(size_t(count) * 3);
+    char_eye.resize(size_t(count) * 3);
+    char_ground_material.resize(count);
+    char_flags.resize(count);
+}
+
+void SnapshotBuffer::resize_joints(uint32_t count) {
+    joints = count;
+    joint_id.resize(count);
+    joint_kind.resize(count);
+    joint_state.resize(count);
+    joint_value.resize(count);
+    joint_value2.resize(count);
+    joint_force.resize(count);
+    joint_torque.resize(count);
 }
 
 void SnapshotPublisher::mark(uint32_t row) {

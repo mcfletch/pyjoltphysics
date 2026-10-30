@@ -33,6 +33,8 @@ void Collector::record(const JPH::Body &body1, const JPH::Body &body2,
     raw.report = ((flags_of(body1.GetUserData()) | flags_of(body2.GetUserData())) & flag::kReport) != 0;
     raw.uid1 = uid_of(body1.GetUserData());
     raw.uid2 = uid_of(body2.GetUserData());
+    raw.material1 = material_of(body1, manifold.mSubShapeID1);
+    raw.material2 = material_of(body2, manifold.mSubShapeID2);
 
     const JPH::uint count = manifold.mRelativeContactPointsOn1.size();
     JPH::Vec3 sum = JPH::Vec3::sZero();
@@ -61,15 +63,50 @@ void Collector::record(const JPH::Body &body1, const JPH::Body &body2,
     contacts_.push_back(raw);
 }
 
+namespace {
+
+// Friction and restitution from the two sides' materials, where either has one.
+void apply_materials(const MaterialTable *table, const JPH::Body &body1, const JPH::Body &body2,
+                     const JPH::ContactManifold &manifold, JPH::ContactSettings &settings) {
+    if (table == nullptr)
+        return;
+    const uint16_t m1 = material_of(body1, manifold.mSubShapeID1);
+    const uint16_t m2 = material_of(body2, manifold.mSubShapeID2);
+    if (m1 == 0 && m2 == 0)
+        return;
+    const JPH::uint count = manifold.mRelativeContactPointsOn1.size();
+    JPH::Vec3 sum = JPH::Vec3::sZero();
+    for (JPH::uint i = 0; i < count; ++i)
+        sum += manifold.mRelativeContactPointsOn1[i];
+    const JPH::RVec3 point = manifold.mBaseOffset + (count ? sum / float(count) : JPH::Vec3::sZero());
+    const JPH::Vec3 relative = body1.GetPointVelocity(point) - body2.GetPointVelocity(point);
+    const JPH::Vec3 n = manifold.mWorldSpaceNormal;
+    const float slip = (relative - n * relative.Dot(n)).Length();
+    table->combine(body1, m1, body2, m2, slip, settings);
+}
+
+}  // namespace
+
 void Collector::OnContactAdded(const JPH::Body &body1, const JPH::Body &body2,
                                const JPH::ContactManifold &manifold,
                                JPH::ContactSettings &settings) {
+    apply_materials(materials, body1, body2, manifold, settings);
     record(body1, body2, manifold, settings, RawContact::Added);
+}
+
+JPH::ValidateResult Collector::OnContactValidate(const JPH::Body &body1, const JPH::Body &body2, JPH::RVec3Arg base,
+                                                 const JPH::CollideShapeResult &result) {
+    if (filter != nullptr && !body1.IsSensor() && !body2.IsSensor() &&
+        (flags_of(body1.GetUserData()) & flags_of(body2.GetUserData()) & flag::kFilterContacts) &&
+        !filter->solve_pair(body1, body2, base, result))
+        return JPH::ValidateResult::RejectAllContactsForThisBodyPair;
+    return JPH::ValidateResult::AcceptAllContactsForThisBodyPair;
 }
 
 void Collector::OnContactPersisted(const JPH::Body &body1, const JPH::Body &body2,
                                    const JPH::ContactManifold &manifold,
                                    JPH::ContactSettings &settings) {
+    apply_materials(materials, body1, body2, manifold, settings);
     // Every resting contact persists every step; only reporting bodies pay.
     if (((flags_of(body1.GetUserData()) | flags_of(body2.GetUserData())) & flag::kReport) == 0)
         return;
@@ -137,6 +174,8 @@ Event PairTracker::make(const Pair &pair, EventPhase phase, uint32_t tick, const
         }
         event.approach = raw->approach;
         event.impulse = raw->impulse;
+        event.material_a = pair.flip ? raw->material2 : raw->material1;
+        event.material_b = pair.flip ? raw->material1 : raw->material2;
     }
     return event;
 }

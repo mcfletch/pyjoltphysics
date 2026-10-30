@@ -13,15 +13,17 @@ reason     uint16    :class:`~pyjoltphysics.EndReason`, for end records
 tick       uint32    the tick the event happened in, which is the tick of the first
                      snapshot that shows it; its time is ``tick / tick_hz`` seconds
 a          uint32    body uid: the lower uid of a contact, the sensor of a trigger,
-                     the body of a sleep or wake
-b          uint32    the other body's uid; 0 for sleep and wake
+                     the body of a sleep or wake; the joint id of a joint record
+b          uint32    the other body's uid; 0 for sleep and wake; a joint's body
 point      3 float64 world position of the contact, metres (begin and persist)
 normal     3 float32 unit vector from ``a`` to ``b`` (contacts, begin and persist)
 approach   float32   closing speed of the two bodies along the normal at the point,
                      m/s, positive when they approach (begin and persist)
 impulse    float32   estimated normal impulse of the collision, N s, in contact begin
                      records; 0 in every other record
-reserved   uint32    0
+material_a uint16    contact begin and persist: the material index of ``a``'s side,
+                     a mesh triangle's own where it has one
+material_b uint16    the same for ``b``
 ========== ========= ===============================================================
 
 Jolt reports contacts to its listeners before its solver runs, so the impulse
@@ -53,7 +55,8 @@ EVENT_DTYPE = np.dtype(
         ('normal', '<f4', (3,)),
         ('approach', '<f4'),
         ('impulse', '<f4'),
-        ('reserved', '<u4'),
+        ('material_a', '<u2'),
+        ('material_b', '<u2'),
     ]
 )
 if EVENT_DTYPE.itemsize != _native.EVENT_SIZE:  # pragma: no cover - a build defect

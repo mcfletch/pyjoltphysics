@@ -4,6 +4,7 @@
 #include <Jolt/Core/JobSystemThreadPool.h>
 #include <Jolt/Physics/Body/BodyLock.h>
 #include <Jolt/Physics/Body/BodyLockInterface.h>
+#include <Jolt/Physics/Collision/CollideShape.h>
 #include <Jolt/Physics/PhysicsSettings.h>
 #include <Jolt/RegisterTypes.h>
 
@@ -49,6 +50,10 @@ WorldCore::WorldCore(const WorldSettings &settings)
     physics.mDeterministicSimulation = true;
     system_.SetPhysicsSettings(physics);
     collector_.min_velocity_for_restitution = settings.min_velocity_for_restitution;
+    materials_.static_speed = settings.static_friction_speed;
+    collector_.materials = &materials_;
+    collector_.filter = this;
+    system_.AddStepListener(&fields_);
     system_.SetContactListener(&collector_);
     system_.SetBodyActivationListener(&collector_);
     row_of_index_.assign(settings.max_bodies, kNoRow);
@@ -58,6 +63,10 @@ WorldCore::WorldCore(const WorldSettings &settings)
 WorldCore::~WorldCore() {
     if (thread_.joinable())
         thread_.detach();
+    for (Joint &joint : joints_)
+        if (joint.constraint != nullptr && joint.state != JointState::Broken)
+            system_.RemoveConstraint(joint.constraint);
+    joints_.clear();
     {
         JPH::BodyInterface &bodies = system_.GetBodyInterfaceNoLock();
         std::vector<JPH::BodyID> ids = characters_->remove_all();
@@ -73,7 +82,7 @@ WorldCore::~WorldCore() {
 
 // -- commands ------------------------------------------------------------------
 
-uint64_t WorldCore::submit(Command &&command, uint64_t at_tick, Uid *first_uid) {
+uint64_t WorldCore::submit(Command &&command, uint64_t at_tick, Uid *first_uid, JointId *first_joint) {
     check();
     const uint32_t uid_count = uids_wanted(command);
     if (uid_count) {
@@ -87,7 +96,7 @@ uint64_t WorldCore::submit(Command &&command, uint64_t at_tick, Uid *first_uid) 
     Batch batch;
     batch.at_tick = at_tick;
     batch.command = std::move(command);
-    const uint64_t seq = queue_.push(std::move(batch), uid_count, first_uid);
+    const uint64_t seq = queue_.push(std::move(batch), uid_count, first_uid, first_joint);
     std::lock_guard<std::mutex> guard(control_);
     wake_.notify_all();
     return seq;
@@ -325,6 +334,7 @@ void WorldCore::loop() {
             }
         }
     }
+    release_job_python();
     python_.release();
     {
         std::lock_guard<std::mutex> guard(control_);
@@ -399,7 +409,8 @@ void WorldCore::clear_python() {
 bool WorldCore::run_python_before(uint64_t index) {
     const bool at = callbacks_.has_at_tick.load();
     const bool before = callbacks_.has_before.load();
-    if (!at && !before)
+    const bool drive = callbacks_.has_drivers.load();
+    if (!at && !before && !drive)
         return true;
     const double time = time_;
     return call_python([&] {
@@ -413,6 +424,15 @@ bool WorldCore::run_python_before(uint64_t index) {
             {
                 std::lock_guard<std::mutex> guard(callbacks_.lock);
                 fn = callbacks_.before_step;
+            }
+            if (fn.is_valid())
+                fn(index, time);
+        }
+        if (drive) {
+            nb::object fn;
+            {
+                std::lock_guard<std::mutex> guard(callbacks_.lock);
+                fn = callbacks_.drivers;
             }
             if (fn.is_valid())
                 fn(index, time);
@@ -487,11 +507,17 @@ bool WorldCore::tick_once() {
     }
     exclusive.lock();
     const auto t2 = Clock::now();
+    move_kinematics(index);
+    activate_motor_joints();
     characters_->step(dt_, uint32_t(index + 1), *jobs_, tick_events_);
     const auto t2b = Clock::now();
+    verdict_tick_ = uint32_t(index + 1);
     system_.Update(float(dt_), settings_.collision_steps, temp_.get(), jobs_.get());
+    joints_after_step(index + 1);
     const auto t3 = Clock::now();
     exclusive.unlock();
+    if (failed_.load())
+        return false;
 
     std::shared_lock<WorldLock> shared(world_lock_);
     const uint64_t tick = index + 1;
@@ -504,6 +530,7 @@ bool WorldCore::tick_once() {
     }
     pairs_.fold(uint32_t(tick), raw_contacts_, raw_activations_, system_.GetBodyInterfaceNoLock(),
                 tick_events_);
+    expire_verdicts(uint32_t(tick));
     ring_.append(tick_events_);
     const auto t4 = Clock::now();
     publish(tick);
@@ -568,11 +595,125 @@ void WorldCore::publish(uint64_t tick) {
             out.motion[row] = uint8_t(body->GetMotionType());
         });
     characters_->write(*buffer);
+    write_joints(*buffer);
     pool_size_ = publisher_.pool_size();
     std::lock_guard<std::mutex> guard(publish_lock_);
     published_ = std::move(buffer);
     tick_.store(tick);
     publish_cv_.notify_all();
+}
+
+// -- the contact filter ----------------------------------------------------------------
+
+namespace {
+
+// Marks the calling thread as inside the contact filter while it calls Python.
+struct InContactFilter {
+    InContactFilter() { in_contact_filter = true; }
+    ~InContactFilter() { in_contact_filter = false; }
+};
+
+}  // namespace
+
+// On a Jolt job thread, or the world thread running jobs, during Update. The
+// world thread holds the world lock exclusively and is not attached, so this
+// thread may wait for the GIL: no thread that holds the GIL waits for the
+// world lock (every such entry point releases the GIL first).
+bool WorldCore::solve_pair(const JPH::Body &body1, const JPH::Body &body2, JPH::RVec3Arg base,
+                           const JPH::CollideShapeResult &result) {
+    if (!callbacks_.has_contact_filter.load() || failed_.load())
+        return true;
+    const uint64_t key = pair_key(body1.GetID(), body2.GetID());
+    {
+        std::lock_guard<std::mutex> guard(verdict_lock_);
+        auto found = verdicts_.find(key);
+        if (found != verdicts_.end()) {
+            found->second.tick = verdict_tick_;
+            return found->second.solve;
+        }
+    }
+    const JPH::RVec3 point = base + result.mContactPointOn1;
+    JPH::Vec3 normal = result.mPenetrationAxis;
+    normal = normal.LengthSq() > 1e-18f ? normal.Normalized() : JPH::Vec3::sAxisY();
+    const float approach = (body1.GetPointVelocity(point) - body2.GetPointVelocity(point)).Dot(normal);
+    Uid a = uid_of(body1.GetUserData()), b = uid_of(body2.GetUserData());
+    const bool flip = b < a;
+    if (flip) {
+        std::swap(a, b);
+        normal = -normal;
+    }
+    bool solve = true;
+    if (!python_available())
+        return true;
+    PyThreadState *state = nullptr;
+    const bool world_thread = on_world_thread();
+    if (world_thread) {
+        if (!python_.attach())
+            return true;
+    } else {
+        {
+            std::lock_guard<std::mutex> guard(job_python_lock_);
+            PyThreadState *&kept = job_python_[std::this_thread::get_id()];
+            if (kept == nullptr)
+                kept = PyThreadState_New(python_.interpreter());
+            state = kept;
+        }
+        PyEval_RestoreThread(state);
+    }
+    {
+        InContactFilter inside;
+        try {
+            nb::object fn;
+            {
+                std::lock_guard<std::mutex> guard(callbacks_.lock);
+                fn = callbacks_.contact_filter;
+            }
+            if (fn.is_valid()) {
+                nb::object answer = fn(a, b, nb::make_tuple(point.GetX(), point.GetY(), point.GetZ()),
+                                       nb::make_tuple(normal.GetX(), normal.GetY(), normal.GetZ()), approach);
+                solve = !(answer.is(nb::handle(Py_False)));
+            }
+        } catch (nb::python_error &error) {
+            fail(error);
+        }
+    }
+    if (world_thread)
+        python_.detach();
+    else
+        PyEval_SaveThread();
+    std::lock_guard<std::mutex> guard(verdict_lock_);
+    auto [found, made] = verdicts_.try_emplace(key, Verdict{solve, verdict_tick_});
+    (void)made;
+    return found->second.solve;
+}
+
+// A refused pair's verdict goes in the first tick it is not met again; a
+// solved pair's goes when its contacts end.
+void WorldCore::expire_verdicts(uint32_t tick) {
+    std::lock_guard<std::mutex> guard(verdict_lock_);
+    for (auto it = verdicts_.begin(); it != verdicts_.end();) {
+        const bool met = it->second.tick == tick;
+        if (!met && !(it->second.solve && pairs_.touching(it->first)))
+            it = verdicts_.erase(it);
+        else
+            ++it;
+    }
+}
+
+// At the end of the world thread, attached: every job thread's kept state is
+// deleted, so a later run of the thread makes new ones.
+void WorldCore::release_job_python() {
+    std::lock_guard<std::mutex> guard(job_python_lock_);
+    if (job_python_.empty())
+        return;
+    if (python_available() && python_.attach()) {
+        for (auto &[id, state] : job_python_) {
+            PyThreadState_Clear(state);
+            PyThreadState_Delete(state);
+        }
+        python_.detach();
+    }
+    job_python_.clear();
 }
 
 // -- reading ---------------------------------------------------------------------
@@ -693,6 +834,7 @@ void WorldCore::mark_forked() {
     forked_ = true;
     // The interpreter deleted every thread state but the forking thread's.
     python_.forget();
+    job_python_.clear();
 }
 
 }  // namespace pj

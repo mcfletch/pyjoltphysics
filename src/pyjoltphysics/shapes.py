@@ -64,6 +64,8 @@ class Shape:
     params: tuple[float, float, float, float] = (0.0, 0.0, 0.0, 0.0)
     points: np.ndarray | None = None
     triangles: np.ndarray | None = None
+    #: A mesh's (t,) uint16 material index of each triangle; 0 takes the body's.
+    materials: np.ndarray | None = None
     heights: np.ndarray | None = None
     origin: tuple[float, float, float] = (0.0, 0.0, 0.0)
     spacing: tuple[float, float] = (1.0, 1.0)
@@ -119,8 +121,14 @@ class Shape:
         )
 
     @classmethod
-    def mesh(cls, points: npt.ArrayLike, triangles: npt.ArrayLike) -> Shape:
+    def mesh(
+        cls, points: npt.ArrayLike, triangles: npt.ArrayLike, materials: npt.ArrayLike | None = None
+    ) -> Shape:
         """Return a triangle mesh: (m, 3) vertices in the body's frame and (t, 3) vertex indices.
+
+        ``materials`` gives each triangle a material index (a world's
+        :class:`~pyjoltphysics.MaterialTable` row): contacts with it and a
+        character standing on it report that index; 0 takes the body's.
 
         A mesh makes static and kinematic bodies only. Degenerate and repeated
         triangles are dropped. Contacts with edges between faces that meet at
@@ -136,7 +144,20 @@ class Shape:
             raise ValueError('triangle indices are not negative')
         indices = tris.astype(np.uint32)
         indices.flags.writeable = False
-        return cls(ShapeKind.MESH, points=_float_rows(points, 3, 'points'), triangles=indices)
+        palette = None
+        if materials is not None:
+            palette = np.array(materials, dtype=np.uint16, copy=True).reshape(-1)
+            if len(palette) != len(indices):
+                raise ValueError(
+                    'materials has %d entries for %d triangles' % (len(palette), len(indices))
+                )
+            palette.flags.writeable = False
+        return cls(
+            ShapeKind.MESH,
+            points=_float_rows(points, 3, 'points'),
+            triangles=indices,
+            materials=palette,
+        )
 
     @classmethod
     def heightfield(

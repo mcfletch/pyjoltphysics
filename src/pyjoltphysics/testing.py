@@ -8,7 +8,7 @@
 from __future__ import annotations
 
 from collections.abc import Callable
-from typing import Protocol, TypeVar
+from typing import Any, Protocol, TypeVar
 
 import numpy as np
 
@@ -16,7 +16,7 @@ from pyjoltphysics.bodies import BodyBatch
 from pyjoltphysics.enums import MotionType
 from pyjoltphysics.world import Snapshot, World
 
-__all__ = ['Digest', 'MakeWorld', 'character_digest', 'floor', 'grid', 'pose_digest']
+__all__ = ['Digest', 'MakeWorld', 'character_digest', 'floor', 'grid', 'latest', 'pose_digest']
 
 #: The ``make_world(**settings)`` factory the test suites' fixture returns.
 MakeWorld = Callable[..., World]
@@ -31,10 +31,20 @@ class Digest(Protocol):
 D = TypeVar('D', bound=Digest)
 
 
-def floor(half: float = 100.0) -> BodyBatch:
-    """Return a static box floor ``2 * half`` metres square whose top face is y = 0."""
+def latest(world: World) -> Snapshot:
+    """Return the world's newest snapshot; an AssertionError before the first tick."""
+    snapshot = world.latest()
+    assert snapshot is not None, 'the world has run no tick'
+    return snapshot
+
+
+def floor(half: float = 100.0, **values: Any) -> BodyBatch:
+    """Return a static box floor ``2 * half`` metres square whose top face is y = 0.
+
+    ``values`` are further :class:`~pyjoltphysics.BodyBatch` fields.
+    """
     return BodyBatch.boxes(
-        [(0.0, -0.5, 0.0)], size=(2 * half, 1.0, 2 * half), motion=MotionType.STATIC
+        [(0.0, -0.5, 0.0)], size=(2 * half, 1.0, 2 * half), motion=MotionType.STATIC, **values
     )
 
 

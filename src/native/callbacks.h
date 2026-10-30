@@ -27,6 +27,10 @@ namespace nb = nanobind;
 
 // Called by the atexit hook: from then on no world thread attaches.
 void mark_interpreter_exiting();
+// False while the interpreter is finalizing or exiting, when no callback runs.
+bool python_available();
+// True on a thread while it runs the contact filter, inside the step.
+extern thread_local bool in_contact_filter;
 
 class PythonThread {
 public:
@@ -39,6 +43,7 @@ public:
     // In the child of a fork, where the interpreter has deleted every thread
     // state but the forking thread's.
     void forget() { state_ = nullptr; }
+    PyInterpreterState *interpreter() const { return interpreter_; }
 
 private:
     PyInterpreterState *interpreter_;
@@ -53,11 +58,15 @@ struct CallbackSet {
     nb::object before_step;
     nb::object after_step;
     nb::object on_events;
+    nb::object drivers;         // fn(tick, time) after before_step: Body.drive's pose callables
+    nb::object contact_filter;  // fn(a, b, point, normal, approach) on Jolt's job threads
     std::multimap<uint64_t, nb::object> at_tick;  // equal ticks fire in registration order
     std::atomic<bool> has_before{false};
     std::atomic<bool> has_after{false};
     std::atomic<bool> has_events{false};
     std::atomic<bool> has_at_tick{false};
+    std::atomic<bool> has_drivers{false};
+    std::atomic<bool> has_contact_filter{false};
     // The lowest tick an at_tick callable waits for; UINT64_MAX for none.
     std::atomic<uint64_t> earliest_at_tick{UINT64_MAX};
 
@@ -65,7 +74,7 @@ struct CallbackSet {
     void add_at_tick(uint64_t tick, nb::object fn);
     // Removes and returns the at_tick callables due at `tick`.
     std::vector<nb::object> take_due(uint64_t tick);
-    bool any_step() const { return has_before.load() || has_after.load(); }
+    bool any_step() const { return has_before.load() || has_after.load() || has_drivers.load(); }
     // The cyclic garbage collector's view: every callable held.
     int traverse(visitproc visit, void *arg);
     // Drops every callable; the caller is attached.
