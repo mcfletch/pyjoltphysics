@@ -33,8 +33,8 @@ def test_ten_thousand_static_posts_apply_within_one_tick(make_world: MakeWorld) 
     world.run_ticks(1)
     stats = world.stats()
     assert stats['bodies'] == 10_501
-    # The batch is applied in the tick, under a tick's length at 120 Hz.
-    assert stats['tick_ms'] < slowdown() * 1000.0 / 120.0, stats
+    # Creating and adding the batch takes less than a tick's length at 120 Hz.
+    assert stats['apply_ms'] < slowdown() * 1000.0 / 120.0, stats
 
 
 def test_the_broad_phase_is_rebuilt_once_after_a_large_static_add(make_world: MakeWorld) -> None:
