@@ -27,7 +27,7 @@ thread. The world thread runs one tick at a time:
 
 1. apply the command batches due at this tick (the exclusive world lock)
 2. call the `at_tick` callables due, then `before_step`
-3. step the world by `1 / tick_hz` seconds (`PhysicsSystem::Update`, the exclusive world lock)
+3. move the characters, then step the world by `1 / tick_hz` seconds (`PhysicsSystem::Update`); both under the exclusive world lock
 4. fold the step's contact reports into event records and append them to the event ring
 5. publish the snapshot
 6. call `after_step`, then `on_events` when the tick made records
@@ -95,7 +95,7 @@ A frozen dataclass; every field has a default.
 | `lockstep` | True unless `start()` is free-running the world |
 | `error` | the exception a callback raised, or None |
 | `submitted_seq` | the sequence number of the last batch submitted |
-| `stats()` | counters (`ticks`, `dropped_ticks`, `events_dropped`, `rejected`, `pool`, `bodies` in the world, `queued_bodies` submitted and not yet applied, `shapes` registered, `broadphase_optimizations`, `idle`, `running`) and mean milliseconds a tick since `reset_stats()` (`apply_ms`, `step_ms`, `events_ms`, `publish_ms`, `callbacks_ms`, `tick_ms`) |
+| `stats()` | counters (`ticks`, `dropped_ticks`, `events_dropped`, `rejected`, `pool`, `bodies` in the world, `queued_bodies` submitted and not yet applied, `shapes` registered, `broadphase_optimizations`, `idle`, `running`) `characters`, `queries` that waited for the world lock, and mean milliseconds a tick since `reset_stats()` (`apply_ms`, `characters_ms`, `step_ms`, `events_ms`, `publish_ms`, `callbacks_ms`, `tick_ms`), with `query_wait_ms` and `query_wait_max_ms`, the mean and longest wait of a query for the world lock |
 
 ## Commands
 
@@ -111,6 +111,7 @@ skipped and counted in `stats()['rejected']`.
 |---|---|
 | `add_bodies(batch)` | add a `BodyBatch`; returns `(uids, seq)`, the uids assigned at once |
 | `remove_bodies(uids)` | remove bodies; their pairs end with `EndReason.REMOVED` |
+| `swap_bodies(remove, batch)` | remove bodies and add a `BodyBatch` in one batch, so in one tick; returns `(uids, seq)` |
 | `set_transforms(uids, positions, orientations=(0, 0, 0, 1))` | teleport; waking moving bodies |
 | `set_velocities(uids, linear=None, angular=None)` | m/s and rad/s; None leaves one as it is |
 | `add_forces(uids, forces)` | N at the centre of mass, acting over the next step |
@@ -262,13 +263,18 @@ exactly and a body crossing a seam meets the same surface as on one field
 at its tile's corner, so a tile's local coordinates stay small anywhere in a
 kilometre-scale world.
 
-A body rolling quickly over a mesh rides up to about 5 mm off it at triangle
-edges, and one landing beside an inner edge of a mesh can be pushed sideways:
-Jolt tests each triangle apart from its neighbours. `BodyFlag.SMOOTH_EDGES`
-on the moving body turns on Jolt's enhanced internal edge removal, which
-merges those contacts with the faces beside them, at some cost a contact; it
-works within one body, so it does not reach across the seam between two tile
-bodies.
+Jolt tests each triangle of a mesh or height field apart from its
+neighbours, so a body crossing an inner edge can meet the edge: a ball rolling
+at 6 m/s rides up to about 5 mm off it, and one landing beside an inner edge
+can be pushed sideways. A static body whose shape holds a mesh or a height
+field has Jolt's enhanced internal edge removal, which merges those contacts
+with the faces beside them; `BodyFlag.NO_SMOOTH_EDGES` turns it off for such a
+body, and `BodyFlag.SMOOTH_EDGES` turns it on for any other (it then applies to
+every pair the body is in). It works within one body: the ball rolls flat
+across one field and still rides up to 6 mm at a seam between two tile
+bodies. Its cost did not show in the benchmarks: 5,000 boxes on the 20,000
+triangle mesh took 3.12 ms a frame with it and 3.24 ms without on 1 job
+thread, and 300 characters on a height field 1.49 and 1.51 ms.
 
 #### Decorations
 
@@ -289,7 +295,8 @@ mass.
 | `CONTINUOUS` | continuous collision detection (Jolt's linear cast), for small fast bodies |
 | `REPORT` | persist events, once a tick, for every pair the body touches |
 | `MOVABLE` | a static body a later `set_motion_types` may make kinematic or dynamic; needs a mass or density |
-| `SMOOTH_EDGES` | Jolt's enhanced internal edge removal: contacts with the inner edges of a mesh, height field or compound merge with the faces beside them |
+| `SMOOTH_EDGES` | Jolt's enhanced internal edge removal: contacts with the inner edges of a mesh, height field or compound merge with the faces beside them; a static mesh or height field has it without the flag |
+| `NO_SMOOTH_EDGES` | a static mesh or height field without enhanced internal edge removal |
 
 ## Snapshots
 
@@ -326,11 +333,11 @@ asleep is in `changed` on that tick, with its final pose.
 
 | Field | Type | Meaning |
 |---|---|---|
-| `kind` | uint8 | `EventKind`: `CONTACT`, `TRIGGER` or `STATE` |
-| `phase` | uint8 | `EventPhase`: `BEGIN`, `PERSIST`, `END`, `SLEEP` or `WAKE` |
+| `kind` | uint8 | `EventKind`: `CONTACT`, `TRIGGER`, `STATE` or `CHARACTER` |
+| `phase` | uint8 | `EventPhase`: `BEGIN`, `PERSIST`, `END`, `SLEEP` or `WAKE`; for a character also `LAND`, `JUMP`, `SLIDE`, `DOWN` and `UP` |
 | `reason` | uint16 | `EndReason` of an end: `NONE`, or `REMOVED` when a body of the pair was removed |
 | `tick` | uint32 | the tick the event happened in: the tick of the first snapshot that shows it |
-| `a`, `b` | uint32 | uids: for a contact the lower uid first; for a trigger the sensor first; for sleep and wake the body, and 0 |
+| `a`, `b` | uint32 | uids: for a contact the lower uid first; for a trigger the sensor first; for sleep and wake the body, and 0; for a character the character, and the body it touched or landed on |
 | `point` | 3 float64 | world contact point, m (begin and persist) |
 | `normal` | 3 float32 | unit vector from `a` to `b` (contact begin and persist) |
 | `approach` | float32 | closing speed along the normal at the point, m/s, positive when approaching |
@@ -378,6 +385,198 @@ first, oldest first, then sleep and wake records; begin and end records are
 never dropped, so that each pair's state stays balanced, and a ring holding
 only those grows past its capacity until it is drained. Dropped records are
 counted in `stats()['events_dropped']`.
+
+Character records (`kind` `CHARACTER`, `a` the character's id):
+
+| Phase | Meaning |
+|---|---|
+| `BEGIN`, `END` | the capsule began or stopped touching body `b` (within 2 cm); a begin has the point, the normal from the character to the body, and the closing speed as `approach` |
+| `LAND` | it landed on `b` (a body's uid or another character's id); `approach` is the landing speed, m/s |
+| `JUMP` | it jumped; `approach` is the launch speed, m/s |
+| `SLIDE`, `DOWN`, `UP` | it began a slide, was knocked down, got up |
+
+They are never dropped from a full ring, as begin and end records are not.
+
+## Queries
+
+```python
+hit = world.raycast((0, 10, 0), (0, -1, 0), 100.0)        # RayHit or None
+hits = world.raycast_batch(origins, directions, 100.0)     # RayHits of (n,) and (n, 3) arrays
+first = world.sweep_sphere(0.25, start, end)               # ShapeHit or None
+every = world.sweep_capsule(0.3, 1.2, start, end, all_hits=True)
+touching = world.overlap(pj.Shape.box((2, 2, 2)), (0, 1, 0))   # ascending uids
+seen = world.raycast(eye, ahead, 50.0, filter=pj.QueryFilter(exclude=[me], mask=0b0110))
+```
+
+A query runs on the calling thread and reads the world as the last completed
+tick left it: a body added by a batch is met from the tick that applies it. It
+takes the world lock's shared side, so it waits while the world thread holds
+the lock exclusively (applying batches, moving characters and stepping) and
+runs beside the rest of the tick and beside other queries. The GIL is released
+while Jolt answers. On the world thread, inside a callback, a query takes no
+lock: the tick already holds the shared side.
+
+| Call | Returns |
+|---|---|
+| `raycast(origin, direction, max_distance=1000, filter=None)` | the first body met, as `RayHit(uid, distance, fraction, point, normal, sub_shape)`, or None; `direction` need not be a unit vector and may not be zero |
+| `raycast_batch(origins, directions, max_distance=1000, filter=None)` | `RayHits`: `hit` (n,) bool, `uid` (n,) uint32 (0 for a miss), `fraction` (n,) float32 of `max_distance`, `distance` (n,) float64 (inf for a miss), `point` (n, 3) float64, `normal` (n, 3) float32, `sub_shape` (n,) uint32; a zero direction is a miss |
+| `sweep(shape, start, end, orientation=(0, 0, 0, 1), filter=None, all_hits=False)` | the first `ShapeHit(uid, fraction, distance, point, normal, depth, sub_shape)` along the way, or None; with `all_hits` a list of every body's first hit, in order |
+| `sweep_sphere(radius, start, end, ...)`, `sweep_capsule(radius, height, start, end, ...)`, `sweep_box(size, start, end, ...)` | `sweep` with that primitive; a capsule's `height` is between its hemisphere centres |
+| `overlap(shape, position, orientation=(0, 0, 0, 1), filter=None)` | (k,) uint32 ascending uids of the bodies the shape touches |
+
+`shape` is a `Shape` (a primitive, or any kind `add_shape` builds) or a shape
+id; a plane is neither swept nor overlapped. A ray's `point` and `normal` are
+the surface's; a sweep's `point` is on the body hit and its `normal` points
+from the body towards the swept shape; `depth` is positive where the shape
+overlaps the body at its start. `sub_shape` is Jolt's sub-shape id of the part
+hit: a mesh triangle, a compound child. Convex shapes are solid to rays, so a
+ray starting inside a box meets it at fraction 0; triangles are met from their
+front face only.
+
+`QueryFilter(group, mask, exclude, triggers, characters)`: a body is met when
+its group shares a bit with `mask` and its mask shares a bit with `group`, as
+two bodies meet each other (both default to every bit); bodies whose uid is in
+`exclude` are passed over; sensors are met only with `triggers=True`;
+character proxies are met unless `characters=False`.
+
+Measured (`benchmarks/characters.py`, gcc 13.3, CPython 3.14, three other
+processes busy on the 32-core machine): 100,000 scattered rays down on the
+20,000 triangle ground among 10,000 posts in one `raycast_batch`, 60 ms, 0.60
+us a ray; one `raycast` from Python, 2.3 us. Single rays from the caller while
+the world free-runs at 120 Hz with 5,000 active boxes, 8 job threads: p50 3.3
+us, p99 1.0 ms, max 2.4 ms; the wait for the lock is the rest of an `Update`
+in progress (1 job thread: p99 2.9 ms, max 9.5 ms).
+
+## Characters
+
+```python
+caps = pj.CharacterCapabilities(walkSpeed=3.0, jumpHeight=1.5, stepHeight=0.35, maxSlope=50.0)
+hero = world.add_character((0.0, 1.0, 0.0), caps, gravity=42.0)   # capsule centre
+hero.set_move((1.0, 0.0, 0.0), 'run')
+hero.jump()
+world.run_ticks(60)
+hero.position, hero.velocity, hero.state, hero.grounded, hero.ground_uid
+rows = world.latest().characters      # every character as read-only views
+```
+
+A character is omi_physics' controller over Jolt's `CharacterVirtual`: a
+capsule moved by collision queries rather than by the solver. The world thread
+moves every character once a tick, before the step and under the exclusive
+world lock, with the inputs of the batches that tick applied. An input reaches
+its character at the next tick, as every command does.
+
+`add_character(position, capabilities=None, gravity=None, pass_group=0,
+group=1, mask=ALL_GROUPS, ignore=(), proxy=True)` returns a `Character` whose
+`id` is a uid from the bodies' sequence. `gravity` is the character's own,
+m/s2 downward, by default the length of the world's. Characters of one
+`pass_group` (other than 0) pass through each other; others block and push
+each other. `group` and `mask` choose the bodies it meets, as for bodies;
+`ignore` names bodies it passes through. With `proxy` a kinematic sensor
+capsule stands in the world under the character's id: rays and sweeps meet it
+(`QueryFilter(characters=False)` passes it over) and sensors and moving bodies
+make trigger records with it. `remove_characters(ids)` takes characters and
+their proxies out.
+
+`CharacterCapabilities` keeps omi_physics' field names and meanings:
+
+| Field | Default | Meaning |
+|---|---|---|
+| `walkSpeed`, `runSpeed`, `sprintSpeed`, `crouchSpeed` | 3, 6, 9, 1.5 | m/s of each `MoveMode` |
+| `canSprint`, `canCrouch`, `canJump`, `canFly` | True | what the character may do |
+| `flySpeed`, `swimSpeed`, `swimDrag` | 8, 2, 4 | m/s, m/s, 1/s |
+| `jumpHeight` | 1.2 | m; the launch speed is `sqrt(2 g jumpHeight)` |
+| `jumpFollowsSlope` | False | a jump keeps the vertical speed of the run along the ground |
+| `stepHeight` | 0.35 | m climbed as a stair, and dropped while staying on the floor |
+| `maxSlope` | 50 | degrees; steeper ground is a wall, and slides the character down |
+| `eyeHeight`, `standHeight`, `crouchHeight`, `radius` | 1.6, 1.8, 1.0, 0.3 | m; heights are feet to crown |
+| `airControl` | 0.4 | the share of the input heard off the ground |
+| `pushFriction` | 6 | 1/s, bleeds carried speed (knockback, slide, jump pad) on the ground |
+| `terminalVelocity` | 55 | m/s, the fastest fall; 0 for none |
+| `suppressOverVoid` | False | hover rather than fall where no ray down meets anything |
+| `coyoteTime`, `jumpBuffer` | 0.12, 0.12 | s a jump is forgiven after walking off an edge, and remembered before landing |
+| `mass` | 80 | kg; divides a knockback, presses on what it stands on |
+| `pushMass` | 200 | kg, the heaviest dynamic body moved by walking into it; a heavier one blocks |
+| `pushSpeed` | None | m/s, the fastest a body is pushed; None is `walkSpeed` |
+| `pushForce` | 1000 | N, the most a character pushes with |
+| `acceleration` | inf | m/s2 towards the input speed (times `airControl` in the air); inf reaches it at once |
+| `stickToFloor` | True | a walker stays on the ground over drops up to `stepHeight` |
+| `smoothEdges` | True | Jolt's enhanced internal edge removal for the capsule |
+
+The vertical motion is the controller's: a constant gravity integrated
+exactly, `v dt - g dt^2 / 2` a tick, so every sample of a jump lies on its
+parabola and the apex is `jumpHeight` above the launch at any tick rate
+(tested to 1e-6 m at 60, 120 and 240 Hz with gravity 42). The horizontal input
+is turned along walkable ground at the same speed, so a slope is climbed at the
+pace of the flat. A grounded character rides what it stands on: a kinematic
+platform's velocity at its feet carries it, up and sideways.
+
+`Character` methods queue inputs and return the batch's sequence number; each
+takes `at_tick`:
+
+| Method | Input |
+|---|---|
+| `set_move(direction, mode='walk', speed=None)` | move along `direction` flattened to the ground, at the `MoveMode` (`'walk'`, `'run'`, `'sprint'`, `'crouch'`) speed or `speed` m/s |
+| `jump()` | jump if grounded or within `coyoteTime`; else held for `jumpBuffer` |
+| `slide(duration, rise=0.3, steer=False)` | from the ground: crouch height, keeping its speed (or, with `steer`, moved by the input), rising to standing over the last `rise` s and waiting under a ceiling |
+| `extend_slide(duration)`, `end_slide()` | lengthen a slide from now; end it |
+| `knock_down()`, `get_up(start_speed=None)` | lie low, input ignored; stand (crouched under a low ceiling), carrying `start_speed` along the last heading |
+| `knockback(impulse)` | change the velocity by `impulse / mass`; an upward part leaves the ground |
+| `apply_impulse(velocity)` | launch at `velocity`, replacing the motion |
+| `set_crouch(crouch)`, `set_fly(flying)`, `set_fly_move(direction)`, `set_swim(swimming, buoyancy=0.9)` | crouch or stand where there is room; fly (no collision, no gravity); swim (collides as walking, moves as flying, pulled by the gravity `buoyancy` leaves) |
+| `teleport(position, search=4.0)` | put the centre at `position` at rest, seated on a floor within `search` m below |
+| `set_gravity(g)`, `set_pass_group(group)`, `set_ignore(uids)`, `remove()` | |
+
+`world.character_ops(ids, ops, codes, values)` queues inputs for many
+characters as arrays (`CharacterOp` codes), as the methods do one at a time.
+
+Its properties read the newest snapshot: `position` (the capsule's centre),
+`feet`, `velocity` (the distance moved over the last tick, per second),
+`state`, `grounded`, `ground_uid`, `ground_normal`, `slide_progress`,
+`landing` (the landing speed in the newest snapshot's tick, else None) and
+`height`. `CharacterState` is the first that holds of `FLYING`, `SWIMMING`,
+`DOWN`, `AIRBORNE`, `SLIDING`, `CROUCHING`, `STANDING`.
+
+`Snapshot.characters` is a `CharacterRows`, one row a character in ascending
+id: `id` (n,) uint32, `position` (n, 3) float64, `velocity` (n, 3) float32,
+`state` (n,) uint8, `grounded` (n,) bool, `ground_uid` (n,) uint32,
+`ground_normal` (n, 3) float32, `slide_progress` (n,) float32, `landing_speed`
+(n,) float32 and `landed_tick` (n,) uint32 of the last landing, and `height`
+(n,) float32, all read-only views of the snapshot's buffer.
+
+Pushing. Walking into a dynamic body no heavier than `pushMass` pushes it with
+Jolt's character impulse, at most `pushForce`; a heavier body blocks. A
+character that walks into another shares the closing speed by their masses:
+a 160 kg character walks a 40 kg one ahead of it.
+
+Islands. Characters whose reach this tick (where their move, stairs, floor
+snap and contacts can take them) shares no other character and no dynamic body
+are moved by separate jobs on Jolt's job system; the rest are moved in id
+order within their island. The results are the same with any number of job
+threads, and a free-running run replays bit for bit in lockstep with 1 or 8
+job threads (tests/test_character_lockstep.py).
+
+Measured (`benchmarks/characters.py`, ms per 60 Hz frame): 300 characters
+running on a 256 x 256 height field, 1.49 ms on 1 job thread and 0.95 ms on 8
+at one tick a frame, 2.84 and 2.11 ms at 120 Hz (two ticks a frame); 30
+characters among 10,000 posts on the 20,000 triangle ground, 0.17 and 0.09 ms
+(0.30 and 0.19 at 120 Hz).
+
+What it does not do: a body thrown at a character does not knock it back (the
+proxy is a sensor; the trigger record says it struck), and a moving body
+other than the ground pushes a character only while the character moves.
+
+## Streaming ground
+
+A landscape too large to hold whole is held as height field tiles
+(`heightfield_tiles`) near the places that need ground: the camera, the
+characters, awake bodies. `swap_bodies(remove, batch)` removes the tiles left
+behind and adds the ones come near in one batch, applied in one tick, so no
+tick has the old tiles gone and the new not yet there. Each new `Shape` is
+built on the calling thread when the batch is submitted; the world thread only
+creates and adds the bodies. In `benchmarks/characters.py` (10 characters
+sprinting over a 1 km field cut into 32-cell tiles, tiles within 48 m kept) a
+frame with a swap took 0.19 ms on 1 job thread against 0.13 ms without,
+building the tile included.
 
 ## Callbacks
 
@@ -434,7 +633,9 @@ first world.
 Scene helpers shared by the suites and the benchmarks: `floor(half)`, a
 static box floor with its top at y = 0; `grid(count, spacing, y0)`, grid
 positions; `pose_digest(snapshot, digest)`, a hashlib object updated with a
-snapshot's uids and poses in uid order; `MakeWorld`, the type of the suites'
+snapshot's uids and poses in uid order; `character_digest(snapshot, digest)`,
+the same with every character's id, position, velocity, state, ground and
+slide progress after the poses; `MakeWorld`, the type of the suites'
 `make_world` fixture.
 
 ## Build information

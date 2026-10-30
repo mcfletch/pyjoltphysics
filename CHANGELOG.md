@@ -16,6 +16,14 @@
 - The event record is 64 bytes, with a float64 contact point; `impulse` is in begin records only.
 - A future `at_tick` leaves a free-running world idle.
 - `stats()`: `bodies` counts bodies in the world, `queued_bodies` those submitted and not applied; `shapes`, `broadphase_optimizations`.
+- Queries on the calling thread under the world lock's shared side, GIL released: `World.raycast`, `raycast_batch`, `sweep`, `sweep_sphere`, `sweep_capsule`, `sweep_box`, `overlap`; `QueryFilter`, `RayHit`, `RayHits`, `ShapeHit`.
+- The world lock holds new queries behind the world thread when it waits, so queries from many threads cannot hold a tick off.
+- Characters: omi_physics' controller over Jolt's `CharacterVirtual`, moved on the world thread each tick: `World.add_character`, `Character`, `CharacterCapabilities`, `CharacterState`, `MoveMode`, `CharacterOp`, `character_ops`, `remove_characters`; `Snapshot.characters` (`CharacterRows`); a kinematic sensor proxy per character.
+- Event kind `CHARACTER` with phases `BEGIN`, `END`, `LAND`, `JUMP`, `SLIDE`, `DOWN`, `UP`.
+- `World.swap_bodies`: removal and addition in one tick, for streamed ground.
+- A static mesh or height field has enhanced internal edge removal by default; `BodyFlag.NO_SMOOTH_EDGES` turns it off.
+- `stats()`: `characters`, `characters_ms`, `queries`, `query_wait_ms`, `query_wait_max_ms`.
+- `pyjoltphysics.testing.character_digest`.
 
 - `jolt_version()`, `build_options()` and `selftest()` over the compiled module `pyjoltphysics._native`.
 - Jolt Physics v5.6.0 (commit e77f1755), double precision, cross-platform deterministic, SSE4.2 floor on x86-64.

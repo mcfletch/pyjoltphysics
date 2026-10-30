@@ -16,6 +16,11 @@ arrays and publishes each tick's poses as read-only NumPy views.
 ...     snapshot = world.latest()           # read-only NumPy views, no copy
 ...     resting = snapshot.position[snapshot.rows_of(uids), 1]
 ...     events = world.drain_events()       # contact, trigger, sleep and wake records
+...     hit = world.raycast((0, 10, 0), (0, -1, 0), 50.0)   # on this thread, under a shared lock
+...     hero = world.add_character((0.0, 1.0, 0.0), pj.CharacterCapabilities(jumpHeight=1.5))
+...     hero.set_move((1.0, 0.0, 0.0), 'run')
+...     world.run_ticks(60)
+...     where = hero.position, hero.state
 ```
 
 A `World` steps on its own thread at `tick_hz` (120 by default) or in lockstep
@@ -27,7 +32,19 @@ Callbacks run on the world thread only when registered. Shapes are boxes,
 spheres, capsules, cylinders, static planes, convex hulls, triangle meshes,
 height fields (and landscapes of height field tiles) and compounds, each
 built once and shared by every body naming its id, with scale, offset and
-centre of mass as body parameters. `docs/API.md` describes every call.
+centre of mass as body parameters. Static meshes and height fields smooth
+their inner edges (Jolt's enhanced internal edge removal) unless a body asks
+otherwise.
+
+Rays, ray batches, shape sweeps and overlaps run on the calling thread under
+the world lock's shared side, with the GIL released: 100,000 scattered rays
+take 60 ms. Characters are omi_physics' controller over Jolt's
+`CharacterVirtual` (walk, run, sprint, crouch, an exact ballistic jump,
+stairs, slopes, slides, knock-downs, landings, pushing, platforms, pass
+groups), moved on the world thread every tick and read from the snapshot; 300
+of them on a height field take 0.95 ms a 60 Hz frame on 8 job threads.
+`swap_bodies` replaces tiles of a streamed landscape in one tick.
+`docs/API.md` describes every call.
 
 The build information:
 
@@ -95,8 +112,9 @@ where the machine has none. In an existing checkout,
 The C++ is `src/_native.cpp` (the module and its build information) and
 `src/native/`, a file per concern: `world` (the thread and the tick),
 `commands` and `apply` (batches), `snapshot`, `events`, `callbacks` (Python on
-the world thread), `layers` (collision groups), `shapes` and `bind_world` (the
-nanobind classes).
+the world thread), `layers` (collision groups), `shapes`, `queries` (rays,
+sweeps, overlaps), `characters` (the controller over `CharacterVirtual`) and
+`bind_world` (the nanobind classes).
 
 An editable install keeps a build directory per wheel tag under `build/`, so
 reinstalling after a change to a source file recompiles that file only:
@@ -123,13 +141,15 @@ tox                 # lint, typecheck, stubs and the suite per interpreter
 tox -e asan         # the suite against an AddressSanitizer and UBSan build (Linux, gcc)
 python benchmarks/boxes5000.py --threads 1 8
 python benchmarks/statics.py --threads 1 8
+python benchmarks/characters.py --threads 1 8     # characters, tile streaming, rays, query waits
 ```
 
 `tests/differential/` runs each scene through Jolt and through `omi_physics`
 and compares them within the tolerance each test states: shapes resting on
 box, mesh and height field grounds, slides by friction, bounces, stacks, a
-pyramid, stairs, triggers, continuous detection, a bin of 1,000 boxes and a
-compound. It is marked `differential` and skipped where `omi_physics` is not
+pyramid, stairs, triggers, continuous detection, a bin of 1,000 boxes, a
+compound, and characters (a run across a height field, stairs, slopes, a jump
+at gravity 42, a fall) against omi_physics' controller. It is marked `differential` and skipped where `omi_physics` is not
 installed.
 
 ## Licence
