@@ -22,8 +22,12 @@ cp -r "$root/src/pyjoltphysics" "$package/"
 cp "$build"/_native*.so "$package/pyjoltphysics/"
 runtimes="$(g++ -print-file-name=libasan.so):$(g++ -print-file-name=libubsan.so)"
 cd "$root"
-LD_PRELOAD="$runtimes" \
-ASAN_OPTIONS="detect_leaks=0:abort_on_error=1:symbolize=1" \
-UBSAN_OPTIONS="print_stacktrace=1:halt_on_error=1" \
-PYTHONPATH="$package" \
-    "$python" -m pytest -p no:cacheprovider -o addopts="--import-mode=importlib" -q tests "$@"
+export LD_PRELOAD="$runtimes"
+export ASAN_OPTIONS="detect_leaks=0:abort_on_error=1:symbolize=1"
+export UBSAN_OPTIONS="print_stacktrace=1:halt_on_error=1"
+export PYTHONPATH="$package"
+# An installed pyjoltphysics (an editable install's import hook among them)
+# would be tested in place of the sanitizer build.
+"$python" -c "import sys, pyjoltphysics._native as m; sys.exit(0 if m.__file__.startswith('$package') else 'pyjoltphysics resolves to ' + m.__file__)"
+
+"$python" -m pytest -p no:cacheprovider -o addopts="--import-mode=importlib" -q tests "$@"

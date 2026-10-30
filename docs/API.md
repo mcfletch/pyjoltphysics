@@ -253,7 +253,7 @@ counted in `stats()['events_dropped']`.
 Callables run on the world thread with the GIL held (attached, on a
 free-threaded build), through one Python thread state the world thread keeps
 for its life. A world with none registered never takes the GIL. Each setter
-returns its argument, so it also serves as a decorator; None removes it.
+returns its argument, so it can decorate the function; None removes it.
 
 | Call | Called as |
 |---|---|

@@ -174,7 +174,7 @@ private:
     WorldSettings settings_;
     double dt_;
 
-    // Jolt. The system refers to the layers and listeners, so it is declared
+    // Jolt. The system holds pointers to the layers and listeners, so it is declared
     // after them and destroyed first.
     CollisionLayers layers_;
     Collector collector_;

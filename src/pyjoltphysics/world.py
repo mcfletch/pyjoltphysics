@@ -411,7 +411,7 @@ class World:
     def set_before_step(self, fn: StepCallback | None) -> StepCallback | None:
         """Call ``fn(tick, time)`` each tick after its batches are applied; None removes it.
 
-        Returns ``fn``, so the method also serves as a decorator. A world with
+        Returns ``fn``, so the method can decorate it. A world with
         a step callback keeps ticking while free-running.
         """
         self._native.set_before_step(fn)
