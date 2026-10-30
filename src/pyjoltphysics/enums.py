@@ -65,8 +65,12 @@ class BodyFlag(enum.IntFlag):
     MOVABLE = 1 << 4
     #: Jolt's enhanced internal edge removal: contacts with the inner edges of
     #: a mesh, height field or compound are merged with the faces beside them,
-    #: so a body sliding across them does not catch on an edge.
+    #: so a body sliding across them does not catch on an edge. A static mesh
+    #: or height field has it without the flag; on a moving body it applies
+    #: to every pair the body is in.
     SMOOTH_EDGES = 1 << 5
+    #: A static mesh or height field without enhanced internal edge removal.
+    NO_SMOOTH_EDGES = 1 << 6
 
 
 class EventKind(enum.IntEnum):

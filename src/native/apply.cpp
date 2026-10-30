@@ -96,7 +96,9 @@ void WorldCore::apply(AddBodies &add, uint64_t) {
         settings.mAllowSleeping = (flags & flag::kNoSleep) == 0;
         settings.mMotionQuality = (flags & flag::kContinuous) ? JPH::EMotionQuality::LinearCast
                                                               : JPH::EMotionQuality::Discrete;
-        settings.mEnhancedInternalEdgeRemoval = (flags & flag::kSmoothEdges) != 0;
+        settings.mEnhancedInternalEdgeRemoval =
+            (flags & flag::kSmoothEdges) != 0 ||
+            (!moving && (flags & flag::kNoSmoothEdges) == 0 && has_internal_edges(*shape));
         settings.mAllowDynamicOrKinematic = moving || (flags & flag::kMovable) != 0;
         settings.mFriction = add.friction[i];
         settings.mRestitution = add.restitution[i];

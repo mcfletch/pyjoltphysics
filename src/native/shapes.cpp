@@ -86,6 +86,23 @@ bool can_be_dynamic(const JPH::Shape &shape) {
     return true;
 }
 
+bool has_internal_edges(const JPH::Shape &shape) {
+    switch (shape.GetSubType()) {
+    case JPH::EShapeSubType::Mesh:
+    case JPH::EShapeSubType::HeightField:
+        return true;
+    default:
+        break;
+    }
+    if (shape.GetType() == JPH::EShapeType::Decorated)
+        return has_internal_edges(*static_cast<const JPH::DecoratedShape &>(shape).GetInnerShape());
+    if (shape.GetType() == JPH::EShapeType::Compound)
+        for (const auto &child : static_cast<const JPH::CompoundShape &>(shape).GetSubShapes())
+            if (has_internal_edges(*child.mShape))
+                return true;
+    return false;
+}
+
 bool Decoration::identity() const {
     return scale == std::array<float, 3>{1.0f, 1.0f, 1.0f} &&
            offset == std::array<float, 3>{0.0f, 0.0f, 0.0f} &&

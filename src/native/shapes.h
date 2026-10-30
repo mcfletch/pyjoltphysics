@@ -63,6 +63,10 @@ std::string shape_problem(uint8_t kind, const ShapeParams &params);
 // properties for them.
 bool can_be_dynamic(const JPH::Shape &shape);
 
+// Whether the shape holds a mesh or a height field, whose inner edges Jolt's
+// enhanced internal edge removal smooths.
+bool has_internal_edges(const JPH::Shape &shape);
+
 // A body's decoration of its shape: scaled first, then placed at `offset`
 // turned by `rotation` in the body's frame, then its centre of mass moved by
 // `com`. The identity decoration leaves the shape as it is.

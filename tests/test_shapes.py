@@ -7,6 +7,7 @@ import pytest
 
 from pyjoltphysics import (
     BodyBatch,
+    BodyFlag,
     MotionType,
     Shape,
     ShapeKind,
@@ -225,33 +226,49 @@ def test_heightfield_tiles_share_their_edge_samples() -> None:
     np.testing.assert_array_equal(first.heights[:, -1], second.heights[:, 0])
 
 
-def test_a_sphere_rolls_across_tile_seams_as_across_one_field(make_world: MakeWorld) -> None:
-    traces = []
-    for tile in (32, 4):
-        world = make_world(threads=1)
-        heights = np.zeros((9, 33), np.float32)
-        world.add_bodies(
-            heightfield_tiles(heights, origin=(-16.0, 0.0, -4.0), spacing=1.0, tile=tile)
-        )
-        (ball,), _ = world.add_bodies(
-            BodyBatch.spheres([(-14.0, 0.25, 0.0)], radius=0.25, linear_velocity=(6.0, 0.0, 0.0))
-        )
-        trace = []
-        for _ in range(240):
-            world.run_ticks(1)
-            snapshot = world.latest()
-            assert snapshot is not None
-            trace.append(snapshot.position[snapshot.rows[int(ball)]])
-        traces.append(np.array(trace))
-    one, tiled = traces
+def rolled_heights(make_world: MakeWorld, tile: int, flags: BodyFlag) -> np.ndarray:
+    """Roll a ball at 6 m/s across a flat 32 m field cut into tiles; return its centre at each tick."""
+    world = make_world(threads=1)
+    heights = np.zeros((9, 33), np.float32)
+    world.add_bodies(
+        heightfield_tiles(heights, origin=(-16.0, 0.0, -4.0), spacing=1.0, tile=tile, flags=flags)
+    )
+    (ball,), _ = world.add_bodies(
+        BodyBatch.spheres([(-14.0, 0.25, 0.0)], radius=0.25, linear_velocity=(6.0, 0.0, 0.0))
+    )
+    trace = []
+    for _ in range(240):
+        world.run_ticks(1)
+        snapshot = world.latest()
+        assert snapshot is not None
+        trace.append(snapshot.position[snapshot.rows[int(ball)]])
+    return np.array(trace)
+
+
+def test_a_sphere_rolls_across_tile_seams_as_across_one_field_without_smooth_edges(
+    make_world: MakeWorld,
+) -> None:
+    one = rolled_heights(make_world, 32, BodyFlag.NO_SMOOTH_EDGES)
+    tiled = rolled_heights(make_world, 4, BodyFlag.NO_SMOOTH_EDGES)
     # Seams lie every 4 m from x = -12; the ball crosses at least two.
     assert tiled[-1, 0] > -7.0
     # A ball rolling at 6 m/s over Jolt's triangles rides up to about 5 mm off
     # them at cell edges, on one field as on a mesh; the seams add no more.
     lift_one = np.abs(one[:, 1] - 0.25).max()
     lift_tiled = np.abs(tiled[:, 1] - 0.25).max()
-    assert lift_one < 0.01
+    assert 0.001 < lift_one < 0.01
     assert lift_tiled <= lift_one + 0.001
+
+
+def test_smooth_edges_flatten_one_field_and_leave_the_seams_between_tiles(
+    make_world: MakeWorld,
+) -> None:
+    one = rolled_heights(make_world, 32, BodyFlag.NONE)
+    tiled = rolled_heights(make_world, 4, BodyFlag.NONE)
+    # Enhanced internal edge removal works within one body: the field's own
+    # cell edges no longer lift the ball, the seams between tile bodies do.
+    assert np.abs(one[:, 1] - 0.25).max() < 1e-4
+    assert np.abs(tiled[:, 1] - 0.25).max() < 0.01
 
 
 # -- compounds -----------------------------------------------------------------

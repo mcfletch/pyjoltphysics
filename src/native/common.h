@@ -34,7 +34,10 @@ constexpr uint32_t kContinuous = 1u << 2;   // linear-cast motion quality (CCD)
 constexpr uint32_t kReport = 1u << 3;       // persist events for this body's pairs
 constexpr uint32_t kMovable = 1u << 4;      // a static body that may become kinematic or dynamic
 constexpr uint32_t kSmoothEdges = 1u << 5;  // Jolt's enhanced internal edge removal
-constexpr uint32_t kAll = (1u << 6) - 1;
+// A static mesh or height field has enhanced internal edge removal unless it
+// carries this flag.
+constexpr uint32_t kNoSmoothEdges = 1u << 6;
+constexpr uint32_t kAll = (1u << 7) - 1;
 }  // namespace flag
 
 // Jolt's body user data: the uid in the low 32 bits and the flags above it,
