@@ -720,8 +720,9 @@ class World:
         Characters of one ``pass_group`` (other than 0) do not block each
         other. ``group`` and ``mask`` are collision bits as bodies have them;
         ``ignore`` names bodies the capsule passes through. ``proxy`` puts a
-        kinematic sensor capsule in the world under the character's id, which
-        rays and sensors meet and which trigger events name.
+        kinematic capsule in the world under the character's id, which rays
+        and sensors meet and trigger events name, and against which no body
+        is solved.
         """
         caps = capabilities if capabilities is not None else CharacterCapabilities()
         values, bits = caps.native()

@@ -18,7 +18,7 @@
 - `stats()`: `bodies` counts bodies in the world, `queued_bodies` those submitted and not applied; `shapes`, `broadphase_optimizations`.
 - Queries on the calling thread under the world lock's shared side, GIL released: `World.raycast`, `raycast_batch`, `sweep`, `sweep_sphere`, `sweep_capsule`, `sweep_box`, `overlap`; `QueryFilter`, `RayHit`, `RayHits`, `ShapeHit`.
 - The world lock holds new queries behind the world thread when it waits, so queries from many threads cannot hold a tick off.
-- Characters: omi_physics' controller over Jolt's `CharacterVirtual`, moved on the world thread each tick: `World.add_character`, `Character`, `CharacterCapabilities`, `CharacterState`, `MoveMode`, `CharacterOp`, `character_ops`, `remove_characters`; `Snapshot.characters` (`CharacterRows`); a kinematic sensor proxy per character.
+- Characters: omi_physics' controller over Jolt's `CharacterVirtual`, moved on the world thread each tick: `World.add_character`, `Character`, `CharacterCapabilities`, `CharacterState`, `MoveMode`, `CharacterOp`, `character_ops`, `remove_characters`; `Snapshot.characters` (`CharacterRows`); a kinematic proxy per character that rays and sensors meet.
 - Event kind `CHARACTER` with phases `BEGIN`, `END`, `LAND`, `JUMP`, `SLIDE`, `DOWN`, `UP`.
 - `World.swap_bodies`: removal and addition in one tick, for streamed ground.
 - A static mesh or height field has enhanced internal edge removal by default; `BodyFlag.NO_SMOOTH_EDGES` turns it off.
