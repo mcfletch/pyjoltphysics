@@ -708,7 +708,7 @@ world.add_bodies(pj.BodyBatch.spheres(positions, flags=pj.BodyFlag.FILTER_CONTAC
 ```
 
 The filter is asked about a pair of solid bodies that both carry
-`BodyFlag.FILTER_CONTACTS` when Jolt first finds them touching
+`BodyFlag.FILTER_CONTACTS` (either of them, with `set_contact_filter(fn, either=True)`) when Jolt first finds them touching
 (`ContactListener::OnContactValidate`), on the job thread that found them,
 inside the step: `a < b` uids, the contact point, the unit normal from `a` to
 `b` and the closing speed (m/s). False lets the two pass through each other;

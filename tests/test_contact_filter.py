@@ -8,7 +8,7 @@ import time
 import numpy as np
 import pytest
 
-from pyjoltphysics import BodyBatch, BodyFlag, EventKind, World, WorldError
+from pyjoltphysics import BodyBatch, BodyFlag, EventKind, MotionType, World, WorldError
 from pyjoltphysics.testing import MakeWorld, floor, grid, latest
 
 
@@ -168,3 +168,23 @@ def test_free_running_world_with_a_filter_stops_and_restarts(make_world: MakeWor
         world.stop()
     world.run_ticks(10)
     assert world.error is None
+
+
+def test_either_asks_where_one_body_carries_the_flag(make_world: MakeWorld) -> None:
+    world = make_world(tick_hz=60.0, threads=1, gravity=(0.0, 0.0, 0.0))
+    asked: list[tuple[int, int]] = []
+
+    def verdict(a: int, b: int, point: object, normal: object, approach: float) -> bool:
+        asked.append((a, b))
+        return False
+
+    world.set_contact_filter(verdict, either=True)
+    (wall,), _ = world.add_bodies(BodyBatch.boxes([(0.0, 0.0, 0.0)], size=(0.2, 4.0, 4.0),
+                                                  motion=MotionType.STATIC,
+                                                  flags=BodyFlag.FILTER_CONTACTS))
+    (ball,), _ = world.add_bodies(BodyBatch.spheres([(-2.0, 0.0, 0.0)], radius=0.25,
+                                                    linear_velocity=(5.0, 0.0, 0.0)))
+    world.run_ticks(60)
+    assert asked == [(wall, ball)] or asked == [(min(wall, ball), max(wall, ball))]
+    snap = latest(world)
+    assert snap.position[snap.rows[ball], 0] > 1.5

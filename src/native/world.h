@@ -168,6 +168,8 @@ public:
     void reset_stats();
 
     ShapeLibrary &shapes() { return shapes_; }
+    // Whether the contact filter is asked where either body carries FILTER_CONTACTS.
+    void set_filter_either(bool either) { collector_.filter_either.store(either); }
 
     // The bodies' and constraints' state as Jolt's StateRecorder writes it,
     // read between ticks under the world lock; callers release the GIL.

@@ -121,6 +121,8 @@ public:
     float min_velocity_for_restitution = 1.0f;
     const MaterialTable *materials = nullptr;
     ContactFilterHost *filter = nullptr;
+    // Ask the filter where either body carries FILTER_CONTACTS, rather than both.
+    std::atomic<bool> filter_either{false};
 
     void take(std::vector<RawContact> &contacts, std::vector<RawActivation> &activations);
 

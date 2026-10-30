@@ -96,8 +96,9 @@ void Collector::OnContactAdded(const JPH::Body &body1, const JPH::Body &body2,
 
 JPH::ValidateResult Collector::OnContactValidate(const JPH::Body &body1, const JPH::Body &body2, JPH::RVec3Arg base,
                                                  const JPH::CollideShapeResult &result) {
-    if (filter != nullptr && !body1.IsSensor() && !body2.IsSensor() &&
-        (flags_of(body1.GetUserData()) & flags_of(body2.GetUserData()) & flag::kFilterContacts) &&
+    const uint32_t first = flags_of(body1.GetUserData()), second = flags_of(body2.GetUserData());
+    const uint32_t marked = filter_either.load(std::memory_order_relaxed) ? (first | second) : (first & second);
+    if (filter != nullptr && !body1.IsSensor() && !body2.IsSensor() && (marked & flag::kFilterContacts) &&
         !filter->solve_pair(body1, body2, base, result))
         return JPH::ValidateResult::RejectAllContactsForThisBodyPair;
     return JPH::ValidateResult::AcceptAllContactsForThisBodyPair;

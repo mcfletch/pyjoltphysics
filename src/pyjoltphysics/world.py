@@ -912,8 +912,12 @@ class World:
             ids, _column(filters, len(ids), np.uint16, 'filters'), at_tick
         )
 
-    def set_contact_filter(self, fn: ContactFilter | None) -> ContactFilter | None:
+    def set_contact_filter(
+        self, fn: ContactFilter | None, either: bool = False
+    ) -> ContactFilter | None:
         """Ask ``fn`` about pairs whose bodies both carry ``BodyFlag.FILTER_CONTACTS`` as they first touch.
+
+        With ``either``, a pair is asked about where either body carries it.
 
         ``fn(a, b, point, normal, approach)`` runs on the Jolt job thread that
         found the pair, inside the step, once per pair: the answer holds until
@@ -922,7 +926,7 @@ class World:
         (``RuntimeError``) or wait for it. An exception stops the world, as
         from any callback. None removes it.
         """
-        self._native.set_contact_filter(fn)
+        self._native.set_contact_filter(fn, bool(either))
         return fn
 
     # -- gravity zones, drag, kinematic tracks -------------------------------
