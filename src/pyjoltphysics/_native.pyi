@@ -1,5 +1,10 @@
 """The compiled pyjoltphysics module over Jolt Physics."""
 
+from collections.abc import Sequence
+from typing import Annotated
+
+import numpy
+from numpy.typing import NDArray
 
 
 def jolt_version() -> str:
@@ -13,4 +18,141 @@ def build_options() -> dict[str, bool | str]:
 def selftest() -> bool:
     """
     Return True after stepping a one-body Jolt world once on the calling thread.
+    """
+
+class CallbackFailed(RuntimeError):
+    pass
+
+class WorldStopped(RuntimeError):
+    pass
+
+EVENT_SIZE: int = 48
+
+class Snapshot:
+    """The state of every body after one tick."""
+
+    @property
+    def tick(self) -> int: ...
+
+    @property
+    def time(self) -> float: ...
+
+    @property
+    def applied_seq(self) -> int: ...
+
+    @property
+    def count(self) -> int: ...
+
+    @property
+    def uid(self) -> Annotated[NDArray[numpy.uint32], dict(shape=(None,), writable=False)]: ...
+
+    @property
+    def position(self) -> Annotated[NDArray[numpy.float64], dict(shape=(None, 3), writable=False)]: ...
+
+    @property
+    def orientation(self) -> Annotated[NDArray[numpy.float32], dict(shape=(None, 4), writable=False)]: ...
+
+    @property
+    def linear_velocity(self) -> Annotated[NDArray[numpy.float32], dict(shape=(None, 3), writable=False)]: ...
+
+    @property
+    def angular_velocity(self) -> Annotated[NDArray[numpy.float32], dict(shape=(None, 3), writable=False)]: ...
+
+    @property
+    def awake(self) -> Annotated[NDArray[numpy.uint8], dict(shape=(None,), writable=False)]: ...
+
+    @property
+    def motion_type(self) -> Annotated[NDArray[numpy.uint8], dict(shape=(None,), writable=False)]: ...
+
+    @property
+    def changed(self) -> Annotated[NDArray[numpy.uint32], dict(shape=(None,), writable=False)]: ...
+
+class World:
+    """A Jolt physics world stepped on its own native thread."""
+
+    def __init__(self, *, tick_hz: float = 120.0, max_catch_up: float = 0.1, gravity: Sequence[float] = (0.0, -9.81, 0.0), threads: int = 4, max_bodies: int = 65536, max_body_pairs: int = 65536, max_contact_constraints: int = 65536, event_capacity: int = 65536, allow_sleeping: bool = True, time_before_sleep: float = 0.5, sleep_velocity: float = 0.03, min_velocity_for_restitution: float = 1.0, collision_steps: int = 1, temp_allocator_mb: int = 16) -> None: ...
+
+    def add_bodies(self, position: Annotated[NDArray[numpy.float64], dict(shape=(None, 3), order='C', device='cpu', writable=False)], orientation: Annotated[NDArray[numpy.float64], dict(shape=(None, 4), order='C', device='cpu', writable=False)], shape_kind: Annotated[NDArray[numpy.uint8], dict(shape=(None,), order='C', device='cpu', writable=False)], shape_params: Annotated[NDArray[numpy.float64], dict(shape=(None, 4), order='C', device='cpu', writable=False)], motion: Annotated[NDArray[numpy.uint8], dict(shape=(None,), order='C', device='cpu', writable=False)], mass: Annotated[NDArray[numpy.float64], dict(shape=(None,), order='C', device='cpu', writable=False)], density: Annotated[NDArray[numpy.float64], dict(shape=(None,), order='C', device='cpu', writable=False)], friction: Annotated[NDArray[numpy.float32], dict(shape=(None,), order='C', device='cpu', writable=False)], restitution: Annotated[NDArray[numpy.float32], dict(shape=(None,), order='C', device='cpu', writable=False)], linear_damping: Annotated[NDArray[numpy.float32], dict(shape=(None,), order='C', device='cpu', writable=False)], angular_damping: Annotated[NDArray[numpy.float32], dict(shape=(None,), order='C', device='cpu', writable=False)], gravity_factor: Annotated[NDArray[numpy.float32], dict(shape=(None,), order='C', device='cpu', writable=False)], linear_velocity: Annotated[NDArray[numpy.float64], dict(shape=(None, 3), order='C', device='cpu', writable=False)], angular_velocity: Annotated[NDArray[numpy.float64], dict(shape=(None, 3), order='C', device='cpu', writable=False)], group: Annotated[NDArray[numpy.uint32], dict(shape=(None,), order='C', device='cpu', writable=False)], mask: Annotated[NDArray[numpy.uint32], dict(shape=(None,), order='C', device='cpu', writable=False)], flags: Annotated[NDArray[numpy.uint32], dict(shape=(None,), order='C', device='cpu', writable=False)], at_tick: int = 0) -> tuple[Annotated[NDArray[numpy.uint32], dict(shape=(None,))], int]:
+        """
+        Queue bodies to add; return their uids and the batch's sequence number.
+        """
+
+    def remove_bodies(self, uids: Annotated[NDArray[numpy.uint32], dict(shape=(None,), order='C', device='cpu', writable=False)], at_tick: int = 0) -> int: ...
+
+    def set_transforms(self, uids: Annotated[NDArray[numpy.uint32], dict(shape=(None,), order='C', device='cpu', writable=False)], position: Annotated[NDArray[numpy.float64], dict(shape=(None, 3), order='C', device='cpu', writable=False)], orientation: Annotated[NDArray[numpy.float64], dict(shape=(None, 4), order='C', device='cpu', writable=False)], at_tick: int = 0) -> int: ...
+
+    def set_velocities(self, uids: Annotated[NDArray[numpy.uint32], dict(shape=(None,), order='C', device='cpu', writable=False)], linear: Annotated[NDArray[numpy.float64], dict(shape=(None, 3), order='C', device='cpu', writable=False)] | None, angular: Annotated[NDArray[numpy.float64], dict(shape=(None, 3), order='C', device='cpu', writable=False)] | None, at_tick: int = 0) -> int: ...
+
+    def add_forces(self, uids: Annotated[NDArray[numpy.uint32], dict(shape=(None,), order='C', device='cpu', writable=False)], values: Annotated[NDArray[numpy.float64], dict(shape=(None, 3), order='C', device='cpu', writable=False)], at_tick: int = 0) -> int: ...
+
+    def add_impulses(self, uids: Annotated[NDArray[numpy.uint32], dict(shape=(None,), order='C', device='cpu', writable=False)], values: Annotated[NDArray[numpy.float64], dict(shape=(None, 3), order='C', device='cpu', writable=False)], at_tick: int = 0) -> int: ...
+
+    def add_torques(self, uids: Annotated[NDArray[numpy.uint32], dict(shape=(None,), order='C', device='cpu', writable=False)], values: Annotated[NDArray[numpy.float64], dict(shape=(None, 3), order='C', device='cpu', writable=False)], at_tick: int = 0) -> int: ...
+
+    def set_gravity(self, gravity: Sequence[float], at_tick: int = 0) -> int: ...
+
+    def activate(self, uids: Annotated[NDArray[numpy.uint32], dict(shape=(None,), order='C', device='cpu', writable=False)], at_tick: int = 0) -> int: ...
+
+    def set_motion_types(self, uids: Annotated[NDArray[numpy.uint32], dict(shape=(None,), order='C', device='cpu', writable=False)], motion: Annotated[NDArray[numpy.uint8], dict(shape=(None,), order='C', device='cpu', writable=False)], at_tick: int = 0) -> int: ...
+
+    def set_materials(self, uids: Annotated[NDArray[numpy.uint32], dict(shape=(None,), order='C', device='cpu', writable=False)], friction: Annotated[NDArray[numpy.float32], dict(shape=(None,), order='C', device='cpu', writable=False)], restitution: Annotated[NDArray[numpy.float32], dict(shape=(None,), order='C', device='cpu', writable=False)], at_tick: int = 0) -> int: ...
+
+    def start(self) -> None: ...
+
+    def stop(self) -> None: ...
+
+    def run_ticks(self, count: int) -> None: ...
+
+    def wait_tick(self, tick: int, timeout: float = -1.0) -> bool: ...
+
+    def latest(self) -> Snapshot | None: ...
+
+    def drain_events(self) -> Annotated[NDArray[numpy.uint8], dict(shape=(None,))]: ...
+
+    def drain_applied(self) -> Annotated[NDArray[numpy.uint64], dict(shape=(None, 2))]: ...
+
+    def set_before_step(self, fn: object | None) -> None: ...
+
+    def set_after_step(self, fn: object | None) -> None: ...
+
+    def set_on_events(self, fn: object | None) -> None: ...
+
+    def at_tick(self, tick: int, fn: object) -> None: ...
+
+    @property
+    def error(self) -> object: ...
+
+    @property
+    def tick(self) -> int: ...
+
+    @property
+    def lockstep(self) -> bool: ...
+
+    @property
+    def forked(self) -> bool: ...
+
+    @property
+    def submitted_seq(self) -> int: ...
+
+    @property
+    def on_world_thread(self) -> bool: ...
+
+    def stats(self) -> dict[str, int | float | bool]: ...
+
+    def reset_stats(self) -> None: ...
+
+def stop_all_worlds() -> None:
+    """
+    Stop every world; from then on no world thread runs a callback. For atexit.
+    """
+
+def fork_prepare() -> None:
+    """The os.register_at_fork hook run before a fork."""
+
+def fork_parent() -> None:
+    """The os.register_at_fork hook run in the parent."""
+
+def fork_child() -> None:
+    """
+    The os.register_at_fork hook run in the child: every world is marked forked.
     """

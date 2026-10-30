@@ -1,0 +1,97 @@
+#include "callbacks.h"
+
+namespace pj {
+
+namespace {
+
+// Set by the atexit hook, which stops every world before the interpreter
+// starts finalizing. The stable ABI of 3.12 has no Py_IsFinalizing.
+std::atomic<bool> exiting{false};
+
+bool finalizing() {
+#if !defined(Py_LIMITED_API) || Py_LIMITED_API >= 0x030D0000
+    if (Py_IsFinalizing())
+        return true;
+#endif
+    return exiting.load();
+}
+
+}  // namespace
+
+void mark_interpreter_exiting() { exiting = true; }
+
+PythonThread::PythonThread() : interpreter_(PyInterpreterState_Get()) {}
+
+bool PythonThread::attach() {
+    if (finalizing())
+        return false;
+    if (state_ == nullptr)
+        state_ = PyThreadState_New(interpreter_);
+    PyEval_RestoreThread(state_);
+    return true;
+}
+
+void PythonThread::detach() { PyEval_SaveThread(); }
+
+void PythonThread::release() {
+    if (state_ == nullptr || finalizing())
+        return;
+    PyEval_RestoreThread(state_);
+    PyThreadState_Clear(state_);
+    PyEval_SaveThread();
+    PyThreadState_Delete(state_);
+    state_ = nullptr;
+}
+
+void CallbackSet::set(nb::object &slot, std::atomic<bool> &flag, nb::object fn) {
+    nb::object old;
+    {
+        std::lock_guard<std::mutex> guard(lock);
+        old = std::move(slot);
+        slot = fn.is_none() ? nb::object() : std::move(fn);
+        flag = slot.is_valid();
+    }
+    // `old` is released here, outside the lock: its finalizer may run Python.
+}
+
+void CallbackSet::add_at_tick(uint64_t tick, nb::object fn) {
+    std::lock_guard<std::mutex> guard(lock);
+    at_tick.emplace(tick, std::move(fn));
+    has_at_tick = true;
+}
+
+std::vector<nb::object> CallbackSet::take_due(uint64_t tick) {
+    std::vector<nb::object> due;
+    std::lock_guard<std::mutex> guard(lock);
+    auto end = at_tick.upper_bound(tick);
+    for (auto it = at_tick.begin(); it != end; ++it)
+        due.push_back(std::move(it->second));
+    at_tick.erase(at_tick.begin(), end);
+    has_at_tick = !at_tick.empty();
+    return due;
+}
+
+int CallbackSet::traverse(visitproc visit, void *arg) {
+    for (nb::object *slot : {&before_step, &after_step, &on_events})
+        if (slot->is_valid())
+            Py_VISIT(slot->ptr());
+    for (auto &entry : at_tick)
+        if (entry.second.is_valid())
+            Py_VISIT(entry.second.ptr());
+    return 0;
+}
+
+void CallbackSet::clear() {
+    nb::object before, after, events;
+    std::multimap<uint64_t, nb::object> pending;
+    {
+        std::lock_guard<std::mutex> guard(lock);
+        before = std::move(before_step);
+        after = std::move(after_step);
+        events = std::move(on_events);
+        pending.swap(at_tick);
+        has_before = has_after = has_events = has_at_tick = false;
+    }
+}
+
+}  // namespace pj

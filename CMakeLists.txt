@@ -64,8 +64,23 @@ find_package(nanobind CONFIG REQUIRED)
 # an ordinary extension where the interpreter has no stable ABI (3.10, 3.11
 # and the free-threaded builds). FREE_THREADED declares the module safe to run
 # with the GIL off. NOMINSIZE keeps -O3 for the binding.
+# src/native holds the world, one file per concern: the thread and tick
+# (world), command batches (commands, apply), snapshots, events, Python
+# callbacks, collision layers, shapes and the nanobind classes (bind_world).
+set(PYJOLTPHYSICS_SOURCES
+  src/_native.cpp
+  src/native/apply.cpp
+  src/native/bind_world.cpp
+  src/native/callbacks.cpp
+  src/native/commands.cpp
+  src/native/events.cpp
+  src/native/jolt_setup.cpp
+  src/native/layers.cpp
+  src/native/shapes.cpp
+  src/native/snapshot.cpp
+  src/native/world.cpp)
 nanobind_add_module(_native NB_STATIC STABLE_ABI FREE_THREADED NOMINSIZE
-  src/_native.cpp)
+  ${PYJOLTPHYSICS_SOURCES})
 target_link_libraries(_native PRIVATE Jolt)
 
 # Jolt's own directory sets these flags for its target only. The binding
@@ -74,13 +89,24 @@ target_link_libraries(_native PRIVATE Jolt)
 if(MSVC)
   target_compile_options(_native PRIVATE /fp:precise /Zc:__cplusplus)
 else()
-  target_compile_options(_native PRIVATE -ffp-contract=off -fno-fast-math)
+  target_compile_options(_native PRIVATE -ffp-contract=off -fno-fast-math -Wall -Wextra)
   if(CMAKE_CXX_COMPILER_ID STREQUAL "AppleClang")
     target_compile_options(_native PRIVATE -faligned-allocation)
   endif()
 endif()
 if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
   target_link_options(_native PRIVATE "LINKER:--exclude-libs,ALL")
+endif()
+
+# A sanitizer build for the test suite: -DPYJOLTPHYSICS_SANITIZE=ON compiles
+# the module and Jolt with AddressSanitizer and UndefinedBehaviorSanitizer.
+# The interpreter then needs libasan preloaded (see tox -e asan).
+option(PYJOLTPHYSICS_SANITIZE "Build with -fsanitize=address,undefined" OFF)
+if(PYJOLTPHYSICS_SANITIZE)
+  foreach(target _native Jolt)
+    target_compile_options(${target} PRIVATE -fsanitize=address,undefined -fno-omit-frame-pointer)
+    target_link_options(${target} PRIVATE -fsanitize=address,undefined)
+  endforeach()
 endif()
 
 install(TARGETS _native LIBRARY DESTINATION pyjoltphysics)

@@ -43,7 +43,7 @@ classifiers = [
     "Topic :: Games/Entertainment",
     "Topic :: Scientific/Engineering :: Physics",
 ]
-dependencies = []
+dependencies = ["numpy>=1.24"]
 
 [project.optional-dependencies]
 test = [
@@ -188,4 +188,6 @@ cache-keys = [
     { file = "CMakeLists.txt" },
     { file = "src/pyjoltphysics/__init__.py" },
     { file = "src/_native.cpp" },
+    { file = "src/native/*.cpp" },
+    { file = "src/native/*.h" },
 ]

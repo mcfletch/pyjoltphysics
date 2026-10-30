@@ -1,0 +1,248 @@
+// The world: one Jolt PhysicsSystem stepped at a fixed rate on a native
+// thread the world owns.
+//
+// A tick, on the world thread:
+//   1. apply the command batches due, under the exclusive world lock
+//   2. at_tick callables, then before_step, under the shared lock (if any)
+//   3. PhysicsSystem::Update, under the exclusive world lock
+//   4. fold the step's contact reports into events, append them to the ring
+//   5. publish the snapshot
+//   6. after_step, then on_events (if any)
+// The world lock is held exclusively only for steps 1 and 3, so readers that
+// take its shared side (queries, in a later phase) run beside the rest.
+//
+// The thread free-runs at tick_hz, or in lockstep runs only the ticks
+// run_ticks asks for. A free-running world with no pending batch, no awake
+// body and no step callback waits on a condition variable and runs no ticks.
+#pragma once
+
+#include "callbacks.h"
+#include "commands.h"
+#include "common.h"
+#include "events.h"
+#include "layers.h"
+#include "shapes.h"
+#include "snapshot.h"
+
+#include <Jolt/Core/JobSystem.h>
+#include <Jolt/Core/TempAllocator.h>
+#include <Jolt/Physics/PhysicsSystem.h>
+
+#include <atomic>
+#include <chrono>
+#include <condition_variable>
+#include <map>
+#include <memory>
+#include <mutex>
+#include <set>
+#include <shared_mutex>
+#include <thread>
+#include <vector>
+
+namespace pj {
+
+struct WorldSettings {
+    double tick_hz = 120.0;
+    double max_catch_up = 0.1;  // seconds behind schedule before ticks are dropped
+    double gravity[3] = {0.0, -9.81, 0.0};
+    int threads = 4;            // job threads, the world thread included
+    uint32_t max_bodies = 65536;
+    uint32_t max_body_pairs = 65536;
+    uint32_t max_contact_constraints = 65536;
+    size_t event_capacity = 65536;
+    bool allow_sleeping = true;
+    float time_before_sleep = 0.5f;    // seconds below the sleep speed
+    float sleep_velocity = 0.03f;      // m/s at every point of the body
+    float min_velocity_for_restitution = 1.0f;  // m/s
+    int collision_steps = 1;
+    uint32_t temp_allocator_mb = 16;
+};
+
+// A callback raised; the world has stopped and keeps the exception.
+struct CallbackFailed : std::runtime_error {
+    CallbackFailed() : std::runtime_error("a world callback raised; the world has stopped") {}
+};
+
+// The world was stopped before what the caller waited for happened.
+struct WorldStopped : std::runtime_error {
+    WorldStopped() : std::runtime_error("the world was stopped") {}
+};
+
+struct WorldStats {
+    uint64_t ticks = 0;
+    uint64_t dropped_ticks = 0;
+    uint64_t events_dropped = 0;
+    uint64_t rejected = 0;  // commands naming a body that cannot take them
+    size_t pool = 0;
+    size_t bodies = 0;
+    size_t pairs = 0;
+    size_t events_held = 0;
+    uint32_t awake = 0;
+    bool idle = false;
+    bool running = false;
+    // Mean milliseconds a tick, since the last reset.
+    double apply_ms = 0, step_ms = 0, events_ms = 0, publish_ms = 0, callbacks_ms = 0, tick_ms = 0;
+    uint64_t timed_ticks = 0;
+};
+
+class WorldCore : public std::enable_shared_from_this<WorldCore> {
+public:
+    explicit WorldCore(const WorldSettings &settings);
+    ~WorldCore();
+    WorldCore(const WorldCore &) = delete;
+    WorldCore &operator=(const WorldCore &) = delete;
+
+    const WorldSettings &settings() const { return settings_; }
+
+    // -- commands: any thread, never waits for the world ---------------------
+    // Returns the batch's sequence number; an add also returns its first uid.
+    uint64_t submit(Command &&command, uint64_t at_tick, Uid *first_uid = nullptr);
+    uint64_t submitted_seq() const { return queue_.last_seq(); }
+
+    // -- the thread: callers release the GIL ---------------------------------
+    void start();
+    void stop();
+    void run_ticks(uint64_t count);
+    bool wait_tick(uint64_t tick, double timeout);
+    bool lockstep() const;
+    bool on_world_thread() const { return std::this_thread::get_id() == thread_id_.load(); }
+    // stop() for a world dropped by Python: joins, or on the world thread
+    // itself detaches the thread, which ends after the current tick.
+    void shutdown();
+
+    // -- reading: any thread -------------------------------------------------
+    std::shared_ptr<SnapshotBuffer> latest() const;
+    std::vector<Event> drain_events() { return ring_.drain(); }
+    std::vector<uint64_t> drain_applied();
+    uint64_t tick() const { return tick_.load(); }
+    WorldStats stats() const;
+    void reset_stats();
+
+    // -- Python state: callers are attached ----------------------------------
+    CallbackSet &callbacks() { return callbacks_; }
+    // Wakes an idle world thread, as after a step callback is registered.
+    void poke();
+    // The cyclic garbage collector's view: the callables and the stored error.
+    int traverse(visitproc visit, void *arg);
+    nb::object error() const;
+    bool failed() const { return failed_.load(); }
+    void clear_python();
+
+    // -- fork ----------------------------------------------------------------
+    void mark_forked();
+    bool forked() const { return forked_.load(); }
+    void check() const {
+        if (forked_.load())
+            throw ForkedError();
+    }
+
+private:
+    enum class Mode { Free, Lockstep };
+    using Clock = std::chrono::steady_clock;
+    static constexpr uint32_t kNoRow = 0xffffffffu;
+
+    struct Row {
+        Uid uid;
+        JPH::BodyID id;
+    };
+
+    void loop();
+    bool busy() const;
+    bool tick_once();
+    bool run_python_before(uint64_t index);
+    bool run_python_after(uint64_t tick);
+    template <typename Body> bool call_python(Body &&body);
+    void fail(nb::python_error &error);
+    void note_applied(uint64_t seq);
+    void publish(uint64_t tick);
+
+    // apply.cpp: one function per command, on the world thread.
+    void apply(Batch &batch, uint64_t index);
+    void apply(AddBodies &add, uint64_t index);
+    void apply(RemoveBodies &remove, uint64_t index);
+    void apply(SetTransforms &set, uint64_t index);
+    void apply(SetVelocities &set, uint64_t index);
+    void apply(AddPushes &push, uint64_t index);
+    void apply(SetGravity &set, uint64_t index);
+    void apply(Activate &activate, uint64_t index);
+    void apply(SetMotionTypes &set, uint64_t index);
+    void apply(SetMaterials &set, uint64_t index);
+    const Row *find(Uid uid) const;
+    void bind_row(Uid uid, const JPH::BodyID &id);
+    void unbind_row(Uid uid);
+
+    WorldSettings settings_;
+    double dt_;
+
+    // Jolt. The system refers to the layers and listeners, so it is declared
+    // after them and destroyed first.
+    CollisionLayers layers_;
+    Collector collector_;
+    std::unique_ptr<JPH::TempAllocator> temp_;
+    std::unique_ptr<JPH::JobSystem> jobs_;
+    JPH::PhysicsSystem system_;
+    ShapeLibrary shapes_;
+
+    // Rows are dense: the snapshot's arrays have one per live body. Removing a
+    // body moves the last row into its place.
+    std::vector<Row> rows_;
+    std::vector<uint32_t> row_of_uid_;
+    std::vector<uint32_t> row_of_index_;  // by BodyID index
+    std::atomic<int64_t> reserved_bodies_{0};
+
+    CommandQueue queue_;
+    std::vector<Batch> due_;
+    uint64_t applied_seq_ = 0;
+    std::set<uint64_t> applied_ahead_;  // applied, above a gap left by an at_tick batch
+    std::mutex applied_lock_;
+    std::vector<uint64_t> applied_log_;  // (seq, tick index) pairs
+
+    SnapshotPublisher publisher_;
+    mutable std::mutex publish_lock_;
+    std::condition_variable publish_cv_;
+    std::shared_ptr<SnapshotBuffer> published_;
+    JPH::BodyIDVector active_;
+
+    PairTracker pairs_;
+    EventRing ring_;
+    std::vector<Event> tick_events_;
+    std::vector<RawContact> raw_contacts_;
+    std::vector<RawActivation> raw_activations_;
+
+    PythonThread python_;
+    CallbackSet callbacks_;
+    mutable std::mutex error_lock_;
+    nb::object error_;
+    std::atomic<bool> failed_{false};
+
+    std::shared_mutex world_lock_;
+    mutable std::mutex control_;
+    std::condition_variable wake_;
+    std::condition_variable done_;
+    std::mutex join_lock_;
+    std::thread thread_;
+    std::atomic<std::thread::id> thread_id_{};
+    Mode mode_ = Mode::Lockstep;
+    bool stopping_ = false;
+    bool running_ = false;
+    bool idle_ = false;
+    uint64_t wanted_ = 0;
+    std::atomic<bool> forked_{false};
+
+    std::atomic<uint64_t> tick_{0};
+    double time_ = 0.0;
+    mutable std::mutex stats_lock_;
+    WorldStats sums_;
+    std::atomic<uint64_t> dropped_ticks_{0};
+    std::atomic<uint64_t> rejected_{0};
+    std::atomic<size_t> pool_size_{0};
+};
+
+// Every live world, for the atexit and fork hooks.
+void register_world(const std::shared_ptr<WorldCore> &world);
+void stop_all_worlds();
+void fork_prepare();
+void fork_parent();
+void fork_child();
+
+}  // namespace pj

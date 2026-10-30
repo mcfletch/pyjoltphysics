@@ -1,10 +1,12 @@
 // pyjoltphysics._native: the compiled module over Jolt Physics.
 //
-// This module reports how Jolt was built and steps a one-body world once, which
-// links the allocator, the type registry, the physics system and the job system.
+// This file reports how Jolt was built, steps a one-body world once on the
+// calling thread, and registers the world classes from src/native.
+#include "native/bindings.h"
+#include "native/common.h"
+
 #include <Jolt/Jolt.h>
 
-#include <Jolt/Core/Factory.h>
 #include <Jolt/Core/JobSystemSingleThreaded.h>
 #include <Jolt/Core/TempAllocator.h>
 #include <Jolt/Physics/Body/BodyCreationSettings.h>
@@ -16,7 +18,6 @@
 #include <nanobind/nanobind.h>
 #include <nanobind/stl/string.h>
 
-#include <mutex>
 #include <stdexcept>
 #include <string>
 
@@ -46,17 +47,6 @@ public:
     bool ShouldCollide(JPH::ObjectLayer, JPH::BroadPhaseLayer) const override { return true; }
     bool ShouldCollide(JPH::ObjectLayer, JPH::ObjectLayer) const override { return true; }
 };
-
-// Jolt's allocator hooks, factory and type registry are process-wide and are
-// set up once, by whichever thread first needs them.
-void register_jolt() {
-    static std::once_flag once;
-    std::call_once(once, [] {
-        JPH::RegisterDefaultAllocator();
-        JPH::Factory::sInstance = new JPH::Factory();
-        JPH::RegisterTypes();
-    });
-}
 
 std::string jolt_version() {
     return std::to_string(JPH_VERSION_MAJOR) + "." + std::to_string(JPH_VERSION_MINOR) + "." +
@@ -122,7 +112,7 @@ nb::dict build_options() {
 // Drop a 1 kg box from 10 m and step it once at 60 Hz. The step succeeds when
 // Jolt reports no error and gravity has moved the box down.
 bool selftest() {
-    register_jolt();
+    pj::register_jolt();
     if (!JPH::VerifyJoltVersionID())
         throw std::runtime_error("Jolt was built with options that differ from the binding's");
 
@@ -167,4 +157,5 @@ NB_MODULE(_native, m) {
           "Return the options the module and its Jolt were built with, by name.");
     m.def("selftest", &selftest, nb::call_guard<nb::gil_scoped_release>(),
           "Return True after stepping a one-body Jolt world once on the calling thread.");
+    pj::bind_world(m);
 }

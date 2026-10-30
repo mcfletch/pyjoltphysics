@@ -32,5 +32,7 @@ def test_committed_stub_matches_the_module() -> None:
 
 def test_stub_declares_every_public_function() -> None:
     stub = STUB.read_text(encoding='utf-8')
-    for name in ('jolt_version', 'build_options', 'selftest'):
+    for name in ('jolt_version', 'build_options', 'selftest', 'add_bodies', 'run_ticks', 'latest'):
         assert 'def %s(' % name in stub
+    for name in ('World', 'Snapshot', 'CallbackFailed', 'WorldStopped'):
+        assert 'class %s' % name in stub
