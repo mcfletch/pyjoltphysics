@@ -5,12 +5,16 @@ namespace pj {
 namespace {
 
 // Set by the atexit hook, which stops every world before the interpreter
-// starts finalizing. The stable ABI of 3.12 has no Py_IsFinalizing.
+// starts finalizing. The stable ABI of 3.12 has no Py_IsFinalizing, and
+// CPython before 3.13 names it _Py_IsFinalizing.
 std::atomic<bool> exiting{false};
 
 bool finalizing() {
-#if !defined(Py_LIMITED_API) || Py_LIMITED_API >= 0x030D0000
+#if PY_VERSION_HEX >= 0x030D0000 && (!defined(Py_LIMITED_API) || Py_LIMITED_API >= 0x030D0000)
     if (Py_IsFinalizing())
+        return true;
+#elif !defined(Py_LIMITED_API)
+    if (_Py_IsFinalizing())
         return true;
 #endif
     return exiting.load();
