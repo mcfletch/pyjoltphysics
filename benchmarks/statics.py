@@ -78,7 +78,9 @@ def heightfield(threads: int, count: int) -> dict[str, object]:
         start = time.perf_counter()
         land = world.add_shape(Shape.heightfield(hills, spacing=1.0))
         build_ms = (time.perf_counter() - start) * 1e3
-        world.add_bodies(BodyBatch.of_shape([(-128.0, 0.0, -128.0)], land, motion=MotionType.STATIC))
+        world.add_bodies(
+            BodyBatch.of_shape([(-128.0, 0.0, -128.0)], land, motion=MotionType.STATIC)
+        )
         rng = np.random.default_rng(2)
         drops = rng.uniform((-100.0, 6.0, -100.0), (100.0, 20.0, 100.0), (300, 3))
         world.add_bodies(BodyBatch.spheres(drops, radius=0.3))
