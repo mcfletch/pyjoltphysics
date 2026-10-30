@@ -11,10 +11,12 @@
 #include <nanobind/stl/optional.h>
 #include <nanobind/stl/pair.h>
 #include <nanobind/stl/string.h>
+#include <nanobind/stl/tuple.h>
 
 #include <cmath>
 #include <cstring>
 #include <optional>
+#include <algorithm>
 
 namespace pj {
 
@@ -188,15 +190,29 @@ template <size_t N> std::array<float, N> row_of(const std::vector<double> &value
     return out;
 }
 
-std::pair<nb::ndarray<nb::numpy, uint32_t, nb::shape<-1>>, uint64_t>
-add_bodies(World &world, const Vec3s &position, const Quats &orientation, const Bytes &shape_kind,
+#define PJ_ADD_ARGS                                                                               \
+    const Vec3s &position, const Quats &orientation, const Bytes &shape_kind,                     \
+        const Params &shape_params, const Words &shape_id, const Vec3s &scale,                    \
+        const Vec3s &shape_offset, const Quats &shape_rotation, const Vec3s &center_of_mass,      \
+        const Bytes &motion, const Doubles &mass, const Doubles &density, const Floats &friction, \
+        const Floats &restitution, const Floats &linear_damping, const Floats &angular_damping,   \
+        const Floats &gravity_factor, const Vec3s &linear_velocity,                               \
+        const Vec3s &angular_velocity, const Words &group, const Words &mask, const Words &flags
+#define PJ_ADD_NAMES                                                                              \
+    position, orientation, shape_kind, shape_params, shape_id, scale, shape_offset,              \
+        shape_rotation, center_of_mass, motion, mass, density, friction, restitution,             \
+        linear_damping, angular_damping, gravity_factor, linear_velocity, angular_velocity,       \
+        group, mask, flags
+
+// The rows of an add batch, checked, with their shapes resolved.
+AddBodies build_add(World &world, const Vec3s &position, const Quats &orientation, const Bytes &shape_kind,
            const Params &shape_params, const Words &shape_id, const Vec3s &scale,
            const Vec3s &shape_offset, const Quats &shape_rotation, const Vec3s &center_of_mass,
            const Bytes &motion, const Doubles &mass, const Doubles &density,
            const Floats &friction, const Floats &restitution, const Floats &linear_damping,
            const Floats &angular_damping, const Floats &gravity_factor,
            const Vec3s &linear_velocity, const Vec3s &angular_velocity, const Words &group,
-           const Words &mask, const Words &flags, uint64_t at_tick) {
+           const Words &mask, const Words &flags) {
     const size_t n = position.shape(0);
     AddBodies add;
     add.position = copy<double>(position, n, "position");
@@ -263,12 +279,30 @@ add_bodies(World &world, const Vec3s &position, const Quats &orientation, const 
         if (!std::isfinite(add.gravity_factor[i]))
             throw std::invalid_argument("gravity_factor is not finite" + row);
     }
+    return add;
+}
+
+using MadeUids = std::pair<nb::ndarray<nb::numpy, uint32_t, nb::shape<-1>>, uint64_t>;
+
+MadeUids submit_add(World &world, Command &&command, size_t n, uint64_t at_tick) {
     Uid first = kNoBody;
-    const uint64_t seq = world.core().submit(Command(std::move(add)), at_tick, &first);
+    const uint64_t seq = world.core().submit(std::move(command), at_tick, &first);
     std::vector<uint32_t> made(n);
     for (size_t i = 0; i < n; ++i)
         made[i] = first + uint32_t(i);
     return {owned<uint32_t, nb::shape<-1>>(std::move(made), {n}), seq};
+}
+
+MadeUids add_bodies(World &world, PJ_ADD_ARGS, uint64_t at_tick) {
+    AddBodies add = build_add(world, PJ_ADD_NAMES);
+    const size_t n = add.uids.size() ? add.uids.size() : add.shapes.size();
+    return submit_add(world, Command(std::move(add)), n, at_tick);
+}
+
+MadeUids swap_bodies(World &world, const Uids &remove, PJ_ADD_ARGS, uint64_t at_tick) {
+    SwapBodies swap{RemoveBodies{uids(remove)}, build_add(world, PJ_ADD_NAMES)};
+    const size_t n = swap.add.shapes.size();
+    return submit_add(world, Command(std::move(swap)), n, at_tick);
 }
 
 // -- add_shape: built on the calling thread with the GIL released -------------------
@@ -390,6 +424,11 @@ nb::dict stats(const World &world) {
     out["bodies"] = s.bodies;
     out["queued_bodies"] = s.queued_bodies;
     out["shapes"] = s.shapes;
+    out["characters"] = s.characters;
+    out["characters_ms"] = s.characters_ms;
+    out["queries"] = s.queries;
+    out["query_wait_ms"] = s.query_wait_ms;
+    out["query_wait_max_ms"] = s.query_wait_max_ms;
     out["broadphase_optimizations"] = s.broadphase_optimizations;
     out["idle"] = s.idle;
     out["running"] = s.running;
@@ -403,6 +442,235 @@ nb::dict stats(const World &world) {
     return out;
 }
 
+
+// -- queries --------------------------------------------------------------------------
+
+QueryFilter make_filter(uint32_t group, uint32_t mask, const Uids &exclude, bool triggers, bool characters) {
+    QueryFilter filter;
+    filter.group = group;
+    filter.mask = mask;
+    filter.exclude = uids(exclude);
+    std::sort(filter.exclude.begin(), filter.exclude.end());
+    filter.triggers = triggers;
+    filter.characters = characters;
+    return filter;
+}
+
+// A query's shape: a registered shape by id, or a primitive by kind and parameters.
+JPH::RefConst<JPH::Shape> query_shape(World &world, uint8_t kind, std::array<double, 4> params, ShapeId id) {
+    if (id != kNoShape) {
+        auto shape = world.core().shapes().find(id).first;
+        if (shape == nullptr)
+            throw std::invalid_argument("shape id " + std::to_string(id) + " names no shape of this world");
+        return shape;
+    }
+    const std::string problem = shape_problem(kind, params);
+    if (!problem.empty())
+        throw std::invalid_argument(problem);
+    if (kind == uint8_t(ShapeKind::Plane))
+        throw std::invalid_argument("a plane cannot be cast or overlapped");
+    return world.core().shapes().primitive(static_cast<ShapeKind>(kind), params);
+}
+
+void check_vector(const std::array<double, 3> &v, const char *name) {
+    for (double x : v)
+        if (!std::isfinite(x))
+            throw std::invalid_argument(std::string(name) + " is not finite");
+}
+
+void check_rotation(const std::array<double, 4> &q) {
+    double norm = 0.0;
+    for (double x : q) {
+        if (!std::isfinite(x))
+            throw std::invalid_argument("orientation is not finite");
+        norm += x * x;
+    }
+    if (norm < 1e-12)
+        throw std::invalid_argument("orientation is a zero quaternion");
+}
+
+using RayArrays = std::tuple<nb::ndarray<nb::numpy, uint8_t, nb::shape<-1>>, nb::ndarray<nb::numpy, uint32_t, nb::shape<-1>>,
+                             nb::ndarray<nb::numpy, float, nb::shape<-1>>, nb::ndarray<nb::numpy, double, nb::shape<-1, 3>>,
+                             nb::ndarray<nb::numpy, float, nb::shape<-1, 3>>, nb::ndarray<nb::numpy, uint32_t, nb::shape<-1>>>;
+using CastArrays = std::tuple<nb::ndarray<nb::numpy, uint32_t, nb::shape<-1>>, nb::ndarray<nb::numpy, uint32_t, nb::shape<-1>>,
+                              nb::ndarray<nb::numpy, float, nb::shape<-1>>, nb::ndarray<nb::numpy, float, nb::shape<-1>>,
+                              nb::ndarray<nb::numpy, double, nb::shape<-1, 3>>, nb::ndarray<nb::numpy, float, nb::shape<-1, 3>>>;
+
+RayArrays raycast_batch(World &world, const Vec3s &origins, const Vec3s &directions, double max_distance,
+                        uint32_t group, uint32_t mask, const Uids &exclude, bool triggers, bool characters) {
+    const size_t n = origins.shape(0);
+    if (directions.shape(0) != n)
+        throw std::invalid_argument("directions has " + std::to_string(directions.shape(0)) +
+                                    " rows where origins has " + std::to_string(n));
+    if (!(std::isfinite(max_distance) && max_distance > 0.0))
+        throw std::invalid_argument("max_distance is finite and positive");
+    const QueryFilter filter = make_filter(group, mask, exclude, triggers, characters);
+    RayResults out;
+    {
+        nb::gil_scoped_release release;
+        world.core().raycast(origins.data(), directions.data(), n, max_distance, filter, out);
+    }
+    return RayArrays(owned<uint8_t, nb::shape<-1>>(std::move(out.hit), {n}),
+                          owned<uint32_t, nb::shape<-1>>(std::move(out.uid), {n}),
+                          owned<float, nb::shape<-1>>(std::move(out.fraction), {n}),
+                          owned<double, nb::shape<-1, 3>>(std::move(out.point), {n, 3}),
+                          owned<float, nb::shape<-1, 3>>(std::move(out.normal), {n, 3}),
+                          owned<uint32_t, nb::shape<-1>>(std::move(out.sub_shape), {n}));
+}
+
+CastArrays cast_shape(World &world, uint8_t kind, std::array<double, 4> params, ShapeId id,
+                     std::array<double, 3> start, std::array<double, 4> rotation, std::array<double, 3> end,
+                     bool all_hits, uint32_t group, uint32_t mask, const Uids &exclude, bool triggers,
+                     bool characters) {
+    check_vector(start, "start");
+    check_vector(end, "end");
+    check_rotation(rotation);
+    const JPH::RefConst<JPH::Shape> shape = query_shape(world, kind, params, id);
+    const QueryFilter filter = make_filter(group, mask, exclude, triggers, characters);
+    std::vector<ShapeHit> hits;
+    {
+        nb::gil_scoped_release release;
+        hits = world.core().cast_shape(*shape, start.data(), rotation.data(), end.data(), all_hits, filter);
+    }
+    const size_t n = hits.size();
+    std::vector<uint32_t> uid(n), sub(n);
+    std::vector<float> fraction(n), depth(n), normal(3 * n);
+    std::vector<double> point(3 * n);
+    for (size_t i = 0; i < n; ++i) {
+        uid[i] = hits[i].uid;
+        sub[i] = hits[i].sub_shape;
+        fraction[i] = hits[i].fraction;
+        depth[i] = hits[i].depth;
+        for (size_t k = 0; k < 3; ++k) {
+            point[3 * i + k] = hits[i].point[k];
+            normal[3 * i + k] = hits[i].normal[k];
+        }
+    }
+    return CastArrays(owned<uint32_t, nb::shape<-1>>(std::move(uid), {n}),
+                          owned<uint32_t, nb::shape<-1>>(std::move(sub), {n}),
+                          owned<float, nb::shape<-1>>(std::move(fraction), {n}),
+                          owned<float, nb::shape<-1>>(std::move(depth), {n}),
+                          owned<double, nb::shape<-1, 3>>(std::move(point), {n, 3}),
+                          owned<float, nb::shape<-1, 3>>(std::move(normal), {n, 3}));
+}
+
+nb::ndarray<nb::numpy, uint32_t, nb::shape<-1>> overlap(World &world, uint8_t kind, std::array<double, 4> params,
+                                                        ShapeId id, std::array<double, 3> position,
+                                                        std::array<double, 4> rotation, uint32_t group,
+                                                        uint32_t mask, const Uids &exclude, bool triggers,
+                                                        bool characters) {
+    check_vector(position, "position");
+    check_rotation(rotation);
+    const JPH::RefConst<JPH::Shape> shape = query_shape(world, kind, params, id);
+    const QueryFilter filter = make_filter(group, mask, exclude, triggers, characters);
+    std::vector<Uid> found;
+    {
+        nb::gil_scoped_release release;
+        found = world.core().overlap(*shape, position.data(), rotation.data(), filter);
+    }
+    const size_t n = found.size();
+    return owned<uint32_t, nb::shape<-1>>(std::move(found), {n});
+}
+
+// -- characters -----------------------------------------------------------------------
+
+// The order of the float capabilities pyjoltphysics.characters sends.
+constexpr size_t kCapsFloats = 24;
+// Bits of the bool capabilities, in the same order.
+enum CapsBit : uint32_t {
+    kCanSprint = 1u << 0,
+    kCanCrouch = 1u << 1,
+    kCanJump = 1u << 2,
+    kCanFly = 1u << 3,
+    kJumpFollowsSlope = 1u << 4,
+    kSuppressOverVoid = 1u << 5,
+    kStickToFloor = 1u << 6,
+    kSmoothEdges = 1u << 7,
+};
+
+CharacterCaps make_caps(const Doubles &values, uint32_t bits) {
+    if (values.shape(0) != kCapsFloats)
+        throw std::invalid_argument("capabilities has " + std::to_string(values.shape(0)) + " values where " +
+                                    std::to_string(kCapsFloats) + " are needed");
+    const double *v = values.data();
+    CharacterCaps c;
+    float *fields[kCapsFloats] = {&c.walk_speed,   &c.run_speed,        &c.sprint_speed,  &c.crouch_speed,
+                                  &c.fly_speed,    &c.swim_speed,       &c.swim_drag,     &c.jump_height,
+                                  &c.step_height,  &c.max_slope,        &c.eye_height,    &c.stand_height,
+                                  &c.crouch_height, &c.radius,          &c.air_control,   &c.push_friction,
+                                  &c.terminal_velocity, &c.coyote_time, &c.jump_buffer,   &c.mass,
+                                  &c.push_mass,    &c.push_speed,       &c.push_force,    &c.acceleration};
+    for (size_t i = 0; i < kCapsFloats; ++i)
+        *fields[i] = float(v[i]);
+    c.can_sprint = bits & kCanSprint;
+    c.can_crouch = bits & kCanCrouch;
+    c.can_jump = bits & kCanJump;
+    c.can_fly = bits & kCanFly;
+    c.jump_follows_slope = bits & kJumpFollowsSlope;
+    c.suppress_over_void = bits & kSuppressOverVoid;
+    c.stick_to_floor = bits & kStickToFloor;
+    c.smooth_edges = bits & kSmoothEdges;
+    if (!(c.radius > 0.0f && c.crouch_height >= 2.0f * c.radius && c.stand_height >= c.crouch_height))
+        throw std::invalid_argument("a character's radius is positive, its crouch height at least twice the radius "
+                                    "and its stand height at least the crouch height");
+    if (!(c.mass > 0.0f))
+        throw std::invalid_argument("a character's mass is positive");
+    return c;
+}
+
+std::pair<Uid, uint64_t> add_character(World &world, std::array<double, 3> position, const Doubles &caps,
+                                       uint32_t bits, double gravity, uint32_t group, uint32_t mask,
+                                       uint32_t pass_group, bool proxy, const Uids &ignore, uint64_t at_tick) {
+    check_vector(position, "position");
+    if (!std::isfinite(gravity))
+        throw std::invalid_argument("gravity is not finite");
+    AddCharacter add;
+    for (size_t i = 0; i < 3; ++i)
+        add.position[i] = position[i];
+    add.caps = make_caps(caps, bits);
+    add.gravity = gravity;
+    add.group = group;
+    add.mask = mask;
+    add.pass_group = pass_group;
+    add.proxy = proxy;
+    add.ignore = uids(ignore);
+    std::sort(add.ignore.begin(), add.ignore.end());
+    Uid first = kNoBody;
+    const uint64_t seq = world.core().submit(Command(std::move(add)), at_tick, &first);
+    return {first, seq};
+}
+
+uint64_t character_ops(World &world, const Uids &ids, const Bytes &ops, const Bytes &codes, const Params &values,
+                       uint64_t at_tick) {
+    const size_t n = ids.shape(0);
+    const std::vector<uint8_t> op = copy<uint8_t>(ops, n, "ops");
+    const std::vector<uint8_t> code = copy<uint8_t>(codes, n, "codes");
+    const std::vector<double> v = copy<double>(values, n, "values");
+    CharacterOps batch;
+    batch.ops.resize(n);
+    for (size_t i = 0; i < n; ++i) {
+        if (op[i] >= uint8_t(CharacterOpCode::Count))
+            throw std::invalid_argument("unknown character op " + std::to_string(op[i]));
+        CharacterOp &out = batch.ops[i];
+        out.id = ids.data()[i];
+        out.op = op[i];
+        out.code = code[i];
+        for (size_t k = 0; k < 4; ++k) {
+            out.v[k] = v[4 * i + k];
+            // NaN is the one value an op takes that is not finite: a Move's "the mode's speed".
+            if (!std::isfinite(out.v[k]) && !(std::isnan(out.v[k]) && out.op == uint8_t(CharacterOpCode::Move)))
+                throw std::invalid_argument("character op values are finite");
+        }
+    }
+    return world.core().submit(Command(std::move(batch)), at_tick);
+}
+
+template <typename T, typename Shape>
+nb::ndarray<nb::numpy, const T, Shape> char_view(const Snapshot &s, const std::vector<T> &values, size_t width) {
+    if (width == 1)
+        return view<T, Shape>(values, {s.buffer->characters});
+    return view<T, Shape>(values, {s.buffer->characters, width});
+}
 }  // namespace
 
 void bind_world(nb::module_ &m) {
@@ -455,6 +723,53 @@ void bind_world(nb::module_ &m) {
             [](const Snapshot &s) {
                 return view<uint8_t, nb::shape<-1>>(s.buffer->motion, {s.buffer->rows});
             },
+            nb::rv_policy::reference_internal)
+        .def_prop_ro("character_count", [](const Snapshot &s) { return s.buffer->characters; })
+        .def_prop_ro(
+            "character_id",
+            [](const Snapshot &s) { return char_view<Uid, nb::shape<-1>>(s, s.buffer->char_id, 1); },
+            nb::rv_policy::reference_internal)
+        .def_prop_ro(
+            "character_position",
+            [](const Snapshot &s) { return char_view<double, nb::shape<-1, 3>>(s, s.buffer->char_position, 3); },
+            nb::rv_policy::reference_internal)
+        .def_prop_ro(
+            "character_velocity",
+            [](const Snapshot &s) { return char_view<float, nb::shape<-1, 3>>(s, s.buffer->char_velocity, 3); },
+            nb::rv_policy::reference_internal)
+        .def_prop_ro(
+            "character_state",
+            [](const Snapshot &s) { return char_view<uint8_t, nb::shape<-1>>(s, s.buffer->char_state, 1); },
+            nb::rv_policy::reference_internal)
+        .def_prop_ro(
+            "character_grounded",
+            [](const Snapshot &s) { return char_view<uint8_t, nb::shape<-1>>(s, s.buffer->char_grounded, 1); },
+            nb::rv_policy::reference_internal)
+        .def_prop_ro(
+            "character_ground",
+            [](const Snapshot &s) { return char_view<Uid, nb::shape<-1>>(s, s.buffer->char_ground, 1); },
+            nb::rv_policy::reference_internal)
+        .def_prop_ro(
+            "character_ground_normal",
+            [](const Snapshot &s) {
+                return char_view<float, nb::shape<-1, 3>>(s, s.buffer->char_ground_normal, 3);
+            },
+            nb::rv_policy::reference_internal)
+        .def_prop_ro(
+            "character_slide",
+            [](const Snapshot &s) { return char_view<float, nb::shape<-1>>(s, s.buffer->char_slide, 1); },
+            nb::rv_policy::reference_internal)
+        .def_prop_ro(
+            "character_landing",
+            [](const Snapshot &s) { return char_view<float, nb::shape<-1>>(s, s.buffer->char_landing, 1); },
+            nb::rv_policy::reference_internal)
+        .def_prop_ro(
+            "character_landed_tick",
+            [](const Snapshot &s) { return char_view<uint32_t, nb::shape<-1>>(s, s.buffer->char_landed_tick, 1); },
+            nb::rv_policy::reference_internal)
+        .def_prop_ro(
+            "character_height",
+            [](const Snapshot &s) { return char_view<float, nb::shape<-1>>(s, s.buffer->char_height, 1); },
             nb::rv_policy::reference_internal)
         .def_prop_ro(
             "changed",
@@ -515,6 +830,45 @@ void bind_world(nb::module_ &m) {
              nb::arg("linear_velocity"), nb::arg("angular_velocity"), nb::arg("group"),
              nb::arg("mask"), nb::arg("flags"), nb::arg("at_tick") = 0,
              "Queue bodies to add; return their uids and the batch's sequence number.")
+        .def("swap_bodies", &swap_bodies, nb::arg("remove"), nb::arg("position"), nb::arg("orientation"),
+             nb::arg("shape_kind"), nb::arg("shape_params"), nb::arg("shape_id"),
+             nb::arg("scale"), nb::arg("shape_offset"), nb::arg("shape_rotation"),
+             nb::arg("center_of_mass"), nb::arg("motion"), nb::arg("mass"),
+             nb::arg("density"), nb::arg("friction"), nb::arg("restitution"),
+             nb::arg("linear_damping"), nb::arg("angular_damping"), nb::arg("gravity_factor"),
+             nb::arg("linear_velocity"), nb::arg("angular_velocity"), nb::arg("group"),
+             nb::arg("mask"), nb::arg("flags"), nb::arg("at_tick") = 0,
+             "Queue removing bodies and adding others in one tick; return the new uids and the sequence number.")
+        .def("raycast_batch", &raycast_batch, nb::arg("origins"), nb::arg("directions"), nb::arg("max_distance"),
+             nb::arg("group"), nb::arg("mask"), nb::arg("exclude"), nb::arg("triggers"), nb::arg("characters"),
+             "Cast rays; return (hit, uid, fraction, point, normal, sub_shape) arrays.")
+        .def("cast_shape", &cast_shape, nb::arg("kind"), nb::arg("params"), nb::arg("shape_id"), nb::arg("start"),
+             nb::arg("rotation"), nb::arg("end"), nb::arg("all_hits"), nb::arg("group"), nb::arg("mask"),
+             nb::arg("exclude"), nb::arg("triggers"), nb::arg("characters"),
+             "Sweep a shape; return (uid, sub_shape, fraction, depth, point, normal) arrays, one row a body hit.")
+        .def("overlap", &overlap, nb::arg("kind"), nb::arg("params"), nb::arg("shape_id"), nb::arg("position"),
+             nb::arg("rotation"), nb::arg("group"), nb::arg("mask"), nb::arg("exclude"), nb::arg("triggers"),
+             nb::arg("characters"), "Return the ascending uids of the bodies a shape at a pose touches.")
+        .def("add_character", &add_character, nb::arg("position"), nb::arg("caps"), nb::arg("bits"),
+             nb::arg("gravity"), nb::arg("group"), nb::arg("mask"), nb::arg("pass_group"), nb::arg("proxy"),
+             nb::arg("ignore"), nb::arg("at_tick") = 0,
+             "Queue a character; return its id and the batch's sequence number.")
+        .def(
+            "remove_characters",
+            [](World &w, const Uids &ids, uint64_t at_tick) {
+                return w.core().submit(Command(RemoveCharacters{uids(ids)}), at_tick);
+            },
+            nb::arg("ids"), nb::arg("at_tick") = 0)
+        .def("character_ops", &character_ops, nb::arg("ids"), nb::arg("ops"), nb::arg("codes"), nb::arg("values"),
+             nb::arg("at_tick") = 0, "Queue character inputs, applied in order at the next tick.")
+        .def(
+            "set_character_ignore",
+            [](World &w, Uid id, const Uids &ignore, uint64_t at_tick) {
+                SetCharacterIgnore set{id, uids(ignore)};
+                std::sort(set.ignore.begin(), set.ignore.end());
+                return w.core().submit(Command(std::move(set)), at_tick);
+            },
+            nb::arg("id"), nb::arg("ignore"), nb::arg("at_tick") = 0)
         .def("add_convex", &add_convex, nb::arg("points"), nb::arg("max_convex_radius"),
              nb::arg("hull_tolerance"), "Build and register a convex hull; return its shape id.")
         .def("add_mesh", &add_mesh, nb::arg("points"), nb::arg("triangles"),

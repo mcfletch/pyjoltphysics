@@ -4,12 +4,13 @@
 // A tick, on the world thread:
 //   1. apply the command batches due, under the exclusive world lock
 //   2. at_tick callables, then before_step, under the shared lock (if any)
-//   3. PhysicsSystem::Update, under the exclusive world lock
+//   3. move the characters, then PhysicsSystem::Update, under the exclusive
+//      world lock
 //   4. fold the step's contact reports into events, append them to the ring
 //   5. publish the snapshot
 //   6. after_step, then on_events (if any)
-// The world lock is held exclusively only for steps 1 and 3, so readers that
-// take its shared side (queries, in a later phase) run beside the rest.
+// The world lock is held exclusively only for steps 1 and 3, so queries, which
+// take its shared side, run beside the rest.
 //
 // The thread free-runs at tick_hz, or in lockstep runs only the ticks
 // run_ticks asks for. A free-running world with no pending batch, no awake
@@ -17,10 +18,12 @@
 #pragma once
 
 #include "callbacks.h"
+#include "characters.h"
 #include "commands.h"
 #include "common.h"
 #include "events.h"
 #include "layers.h"
+#include "queries.h"
 #include "shapes.h"
 #include "snapshot.h"
 
@@ -77,6 +80,7 @@ struct WorldStats {
     size_t bodies = 0;          // in the world: applied adds less applied removals
     size_t queued_bodies = 0;   // submitted in add batches not yet applied
     size_t shapes = 0;          // registered shape ids
+    size_t characters = 0;
     uint64_t broadphase_optimizations = 0;
     size_t pairs = 0;
     size_t events_held = 0;
@@ -84,8 +88,11 @@ struct WorldStats {
     bool idle = false;
     bool running = false;
     // Mean milliseconds a tick, since the last reset.
-    double apply_ms = 0, step_ms = 0, events_ms = 0, publish_ms = 0, callbacks_ms = 0, tick_ms = 0;
+    double apply_ms = 0, characters_ms = 0, step_ms = 0, events_ms = 0, publish_ms = 0, callbacks_ms = 0, tick_ms = 0;
     uint64_t timed_ticks = 0;
+    // Queries that waited for the world lock: how many, the mean and the longest wait.
+    uint64_t queries = 0;
+    double query_wait_ms = 0, query_wait_max_ms = 0;
 };
 
 class WorldCore : public std::enable_shared_from_this<WorldCore> {
@@ -122,6 +129,14 @@ public:
     void reset_stats();
 
     ShapeLibrary &shapes() { return shapes_; }
+
+    // -- queries: any thread; callers release the GIL ------------------------
+    void raycast(const double *origins, const double *directions, size_t count, double max_distance,
+                 const QueryFilter &filter, RayResults &out);
+    std::vector<ShapeHit> cast_shape(const JPH::Shape &shape, const double start[3], const double rotation[4],
+                                     const double end[3], bool all_hits, const QueryFilter &filter);
+    std::vector<Uid> overlap(const JPH::Shape &shape, const double position[3], const double rotation[4],
+                             const QueryFilter &filter);
 
     // -- Python state: callers are attached ----------------------------------
     CallbackSet &callbacks() { return callbacks_; }
@@ -173,6 +188,12 @@ private:
     void apply(Activate &activate, uint64_t index);
     void apply(SetMotionTypes &set, uint64_t index);
     void apply(SetMaterials &set, uint64_t index);
+    void apply(SwapBodies &swap, uint64_t index);
+    void apply(AddCharacter &add, uint64_t index);
+    void apply(RemoveCharacters &remove, uint64_t index);
+    void apply(CharacterOps &ops, uint64_t index);
+    void apply(SetCharacterIgnore &set, uint64_t index);
+    void remove_proxies(std::vector<JPH::BodyID> ids, uint64_t index);
     void wake_under_sensor(const JPH::BodyID &sensor);
     // Rebuilds the broad phase's trees after a large add of static bodies, once
     // the world thread has a moment with no tick due.
@@ -191,6 +212,8 @@ private:
     std::unique_ptr<JPH::TempAllocator> temp_;
     std::unique_ptr<JPH::JobSystem> jobs_;
     JPH::PhysicsSystem system_;
+    // Destroyed before the system, whose bodies its characters reference.
+    std::unique_ptr<CharacterSystem> characters_;
     ShapeLibrary shapes_;
 
     // Rows are dense: the snapshot's arrays have one per live body. Removing a
@@ -229,6 +252,19 @@ private:
     std::atomic<bool> failed_{false};
 
     std::shared_mutex world_lock_;
+    // The shared side of the world lock for a query; nothing on the world thread,
+    // whose tick already holds it.
+    class QueryLock {
+    public:
+        explicit QueryLock(WorldCore &world);
+
+    private:
+        std::shared_lock<std::shared_mutex> lock_;
+    };
+    std::atomic<uint64_t> queries_{0};
+    std::atomic<uint64_t> query_wait_ns_{0};
+    std::atomic<uint64_t> query_wait_max_ns_{0};
+    std::atomic<size_t> applied_characters_{0};
     mutable std::mutex control_;
     std::condition_variable wake_;
     std::condition_variable done_;

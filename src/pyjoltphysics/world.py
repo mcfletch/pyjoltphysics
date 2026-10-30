@@ -23,7 +23,7 @@ import math
 import os
 import threading
 import weakref
-from collections.abc import Callable
+from collections.abc import Callable, Iterable, Sequence
 from types import TracebackType
 from typing import Any
 
@@ -32,8 +32,10 @@ import numpy.typing as npt
 
 from pyjoltphysics import _native
 from pyjoltphysics.bodies import BodyBatch
+from pyjoltphysics.characters import Character, CharacterCapabilities, CharacterRows
 from pyjoltphysics.enums import MotionType, ShapeKind
 from pyjoltphysics.events import as_events
+from pyjoltphysics.queries import ALL_GROUPS, DEFAULT_FILTER, QueryFilter, RayHit, RayHits, ShapeHit
 from pyjoltphysics.settings import WorldSettings
 from pyjoltphysics.shapes import Shape, ShapeInfo
 
@@ -100,6 +102,23 @@ def _column(values: npt.ArrayLike, count: int, dtype: type, name: str) -> np.nda
     if array.shape != (count,):
         raise ValueError('%s has shape %s where (%d,) is needed' % (name, array.shape, count))
     return np.ascontiguousarray(array)
+
+
+def _triple(values: Sequence[float], name: str) -> tuple[float, float, float]:
+    x, y, z = (float(v) for v in values)
+    if not all(math.isfinite(v) for v in (x, y, z)):
+        raise ValueError('%s is not finite' % (name,))
+    return (x, y, z)
+
+
+def _quad(values: Sequence[float]) -> tuple[float, float, float, float]:
+    x, y, z, w = (float(v) for v in values)
+    return (x, y, z, w)
+
+
+def _as_triple(row: npt.NDArray[np.floating[Any]]) -> tuple[float, float, float]:
+    x, y, z = row.tolist()
+    return (float(x), float(y), float(z))
 
 
 class Snapshot:
@@ -199,6 +218,11 @@ class Snapshot:
         """Return the row of each uid, -1 for a uid that is not a body in this snapshot."""
         table = self.rows
         return np.array([table.get(int(u), -1) for u in np.atleast_1d(np.asarray(uids))], np.int64)
+
+    @property
+    def characters(self) -> CharacterRows:
+        """Every character, as read-only views; see :class:`~pyjoltphysics.CharacterRows`."""
+        return CharacterRows(self._native)
 
     def includes(self, seq: int) -> bool:
         """True when the batch with sequence number ``seq``, and every batch before it, is applied."""
@@ -504,6 +528,251 @@ class World:
             _column(restitution, n, np.float32, 'restitution'),
             at_tick,
         )
+
+    def swap_bodies(
+        self, remove: npt.ArrayLike, batch: BodyBatch, at_tick: int = 0
+    ) -> tuple[npt.NDArray[np.uint32], int]:
+        """Queue removing ``remove`` and adding ``batch`` in one tick; return the new uids and the sequence number.
+
+        Ground streamed around a moving focus swaps tiles this way: no tick
+        has the old tiles gone and the new ones not yet there.
+        """
+        arrays = batch.arrays(
+            self._settings.linear_damping, self._settings.angular_damping, self.add_shape
+        )
+        return self._native.swap_bodies(_uids(remove), **arrays, at_tick=at_tick)
+
+    # -- queries -----------------------------------------------------------
+
+    def raycast(
+        self,
+        origin: Sequence[float],
+        direction: Sequence[float],
+        max_distance: float = 1000.0,
+        filter: QueryFilter | None = None,
+    ) -> RayHit | None:
+        """Return the first body a ray from ``origin`` along ``direction`` meets within ``max_distance`` m.
+
+        ``direction`` need not be a unit vector. None when the ray meets nothing.
+        """
+        d = np.asarray(direction, dtype=np.float64).reshape(3)
+        if not (np.all(np.isfinite(d)) and np.any(d != 0.0)):
+            raise ValueError(
+                'a ray direction is finite and not zero, not %r' % (tuple(d.tolist()),)
+            )
+        hits = self.raycast_batch([origin], d[None, :], max_distance, filter)
+        if not hits.hit[0]:
+            return None
+        px, py, pz = hits.point[0].tolist()
+        nx, ny, nz = hits.normal[0].tolist()
+        return RayHit(
+            uid=int(hits.uid[0]),
+            distance=float(hits.distance[0]),
+            fraction=float(hits.fraction[0]),
+            point=(px, py, pz),
+            normal=(nx, ny, nz),
+            sub_shape=int(hits.sub_shape[0]),
+        )
+
+    def raycast_batch(
+        self,
+        origins: npt.ArrayLike,
+        directions: npt.ArrayLike,
+        max_distance: float = 1000.0,
+        filter: QueryFilter | None = None,
+    ) -> RayHits:
+        """Cast one ray a row of ``origins`` (n, 3) along ``directions`` (n, 3); return the answers as arrays.
+
+        A row whose direction is zero is a miss.
+        """
+        o = np.ascontiguousarray(origins, dtype=np.float64).reshape(-1, 3)
+        d = np.ascontiguousarray(directions, dtype=np.float64).reshape(-1, 3)
+        hit, uid, fraction, point, normal, sub = self._native.raycast_batch(
+            o, d, float(max_distance), *(filter or DEFAULT_FILTER).native()
+        )
+        hits = hit.view(np.bool_)
+        distance = np.where(hits, fraction.astype(np.float64) * float(max_distance), np.inf)
+        return RayHits(hits, uid, fraction, distance, point, normal, sub)
+
+    def sweep(
+        self,
+        shape: Shape | int,
+        start: Sequence[float],
+        end: Sequence[float],
+        orientation: Sequence[float] = (0.0, 0.0, 0.0, 1.0),
+        filter: QueryFilter | None = None,
+        all_hits: bool = False,
+    ) -> Any:
+        """Sweep ``shape`` at ``orientation`` from ``start`` to ``end``; return the first :class:`ShapeHit` or None.
+
+        With ``all_hits``, return the first hit of every body along the way,
+        in order. ``shape`` is a :class:`Shape` or a shape id.
+        """
+        kind, params, shape_id = self._query_shape(shape)
+        uid, sub, fraction, depth, point, normal = self._native.cast_shape(
+            kind,
+            params,
+            shape_id,
+            _triple(start, 'start'),
+            _quad(orientation),
+            _triple(end, 'end'),
+            all_hits,
+            *(filter or DEFAULT_FILTER).native(),
+        )
+        length = math.dist(_triple(start, 'start'), _triple(end, 'end'))
+        hits = [
+            ShapeHit(
+                uid=int(uid[k]),
+                fraction=float(fraction[k]),
+                distance=float(fraction[k]) * length,
+                point=_as_triple(point[k]),
+                normal=_as_triple(normal[k]),
+                depth=float(depth[k]),
+                sub_shape=int(sub[k]),
+            )
+            for k in range(len(uid))
+        ]
+        if all_hits:
+            return hits
+        return hits[0] if hits else None
+
+    def sweep_sphere(
+        self,
+        radius: float,
+        start: Sequence[float],
+        end: Sequence[float],
+        filter: QueryFilter | None = None,
+        all_hits: bool = False,
+    ) -> Any:
+        """Sweep a sphere of ``radius`` from ``start`` to ``end``; see :meth:`sweep`."""
+        return self.sweep(Shape.sphere(radius), start, end, filter=filter, all_hits=all_hits)
+
+    def sweep_capsule(
+        self,
+        radius: float,
+        height: float,
+        start: Sequence[float],
+        end: Sequence[float],
+        orientation: Sequence[float] = (0.0, 0.0, 0.0, 1.0),
+        filter: QueryFilter | None = None,
+        all_hits: bool = False,
+    ) -> Any:
+        """Sweep a Y-axis capsule (``height`` between the hemisphere centres); see :meth:`sweep`."""
+        return self.sweep(Shape.capsule(radius, height), start, end, orientation, filter, all_hits)
+
+    def sweep_box(
+        self,
+        size: Sequence[float],
+        start: Sequence[float],
+        end: Sequence[float],
+        orientation: Sequence[float] = (0.0, 0.0, 0.0, 1.0),
+        filter: QueryFilter | None = None,
+        all_hits: bool = False,
+    ) -> Any:
+        """Sweep a box of edge lengths ``size``; see :meth:`sweep`."""
+        return self.sweep(Shape.box(size), start, end, orientation, filter, all_hits)
+
+    def overlap(
+        self,
+        shape: Shape | int,
+        position: Sequence[float],
+        orientation: Sequence[float] = (0.0, 0.0, 0.0, 1.0),
+        filter: QueryFilter | None = None,
+    ) -> npt.NDArray[np.uint32]:
+        """Return the ascending uids of the bodies ``shape`` touches at ``position`` and ``orientation``."""
+        kind, params, shape_id = self._query_shape(shape)
+        return self._native.overlap(
+            kind,
+            params,
+            shape_id,
+            _triple(position, 'position'),
+            _quad(orientation),
+            *(filter or DEFAULT_FILTER).native(),
+        )
+
+    def _query_shape(
+        self, shape: Shape | int
+    ) -> tuple[int, tuple[float, float, float, float], int]:
+        if isinstance(shape, Shape):
+            if shape.kind < ShapeKind.CONVEX:
+                return int(shape.kind), shape.params, 0
+            return 0, (0.0, 0.0, 0.0, 0.0), self.add_shape(shape)
+        return 0, (0.0, 0.0, 0.0, 0.0), int(shape)
+
+    # -- characters --------------------------------------------------------
+
+    def add_character(
+        self,
+        position: Sequence[float],
+        capabilities: CharacterCapabilities | None = None,
+        gravity: float | None = None,
+        pass_group: int = 0,
+        group: int = 1,
+        mask: int = ALL_GROUPS,
+        ignore: Iterable[int] = (),
+        proxy: bool = True,
+        at_tick: int = 0,
+    ) -> Character:
+        """Queue a character with its capsule's centre at ``position``; return its :class:`Character`.
+
+        ``gravity`` (m/s2, downward) defaults to the length of the world's.
+        Characters of one ``pass_group`` (other than 0) do not block each
+        other. ``group`` and ``mask`` are collision bits as bodies have them;
+        ``ignore`` names bodies the capsule passes through. ``proxy`` puts a
+        kinematic sensor capsule in the world under the character's id, which
+        rays and sensors meet and which trigger events name.
+        """
+        caps = capabilities if capabilities is not None else CharacterCapabilities()
+        values, bits = caps.native()
+        g = float(np.linalg.norm(self._settings.gravity)) if gravity is None else float(gravity)
+        cid, _ = self._native.add_character(
+            _triple(position, 'position'),
+            values,
+            bits,
+            g,
+            int(group),
+            int(mask),
+            int(pass_group),
+            bool(proxy),
+            _uids(list(ignore)),
+            at_tick,
+        )
+        return Character(self, cid)
+
+    def character(self, cid: int) -> Character:
+        """Return the :class:`Character` handle of a character id."""
+        return Character(self, cid)
+
+    def remove_characters(self, ids: npt.ArrayLike, at_tick: int = 0) -> int:
+        """Queue removing characters and their proxy bodies."""
+        return self._native.remove_characters(_uids(ids), at_tick)
+
+    def character_ops(
+        self,
+        ids: npt.ArrayLike,
+        ops: npt.ArrayLike,
+        codes: npt.ArrayLike,
+        values: npt.ArrayLike,
+        at_tick: int = 0,
+    ) -> int:
+        """Queue character inputs as arrays, applied in order at the next tick.
+
+        One row an input: the character id, a :class:`~pyjoltphysics.CharacterOp`,
+        its small code and four values; :class:`Character`'s methods build them.
+        """
+        ids_ = _uids(ids)
+        n = len(ids_)
+        return self._native.character_ops(
+            ids_,
+            _column(ops, n, np.uint8, 'ops'),
+            _column(codes, n, np.uint8, 'codes'),
+            _vectors(values, n, 4, 'values'),
+            at_tick,
+        )
+
+    def set_character_ignore(self, cid: int, uids: Iterable[int], at_tick: int = 0) -> int:
+        """Queue the set of bodies a character passes through."""
+        return self._native.set_character_ignore(int(cid), _uids(list(uids)), at_tick)
 
     # -- callbacks on the world thread -------------------------------------
 

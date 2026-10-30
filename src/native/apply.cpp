@@ -307,4 +307,44 @@ void WorldCore::apply(SetMaterials &set, uint64_t) {
     }
 }
 
+void WorldCore::apply(SwapBodies &swap, uint64_t index) {
+    apply(swap.remove, index);
+    apply(swap.add, index);
+}
+
+void WorldCore::apply(AddCharacter &add, uint64_t) {
+    const JPH::ObjectLayer layer = layers_.layer(add.group, add.mask, true);
+    collector_.quiet = true;
+    characters_->add(add, layer, *temp_);
+    collector_.quiet = false;
+    ++applied_characters_;
+}
+
+void WorldCore::remove_proxies(std::vector<JPH::BodyID> ids, uint64_t index) {
+    if (ids.empty())
+        return;
+    pairs_.remove_bodies(ids, uint32_t(index + 1), tick_events_);
+    JPH::BodyInterface &bodies = system_.GetBodyInterfaceNoLock();
+    collector_.quiet = true;
+    bodies.RemoveBodies(ids.data(), int(ids.size()));
+    collector_.quiet = false;
+    bodies.DestroyBodies(ids.data(), int(ids.size()));
+}
+
+void WorldCore::apply(RemoveCharacters &remove, uint64_t index) {
+    const size_t before = characters_->size();
+    remove_proxies(characters_->remove(remove.uids), index);
+    const size_t removed = before - characters_->size();
+    reserved_bodies_ -= int64_t(removed);
+    applied_characters_ -= removed;
+}
+
+void WorldCore::apply(CharacterOps &ops, uint64_t index) {
+    for (const CharacterOp &op : ops.ops)
+        if (!characters_->apply(op, uint32_t(index + 1), *temp_))
+            ++rejected_;
+}
+
+void WorldCore::apply(SetCharacterIgnore &set, uint64_t) { characters_->set_ignore(set.id, std::move(set.ignore)); }
+
 }  // namespace pj

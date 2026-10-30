@@ -5,6 +5,7 @@
 // body named by uid. Vectors of 3 or 4 components are flattened row by row.
 #pragma once
 
+#include "characters.h"
 #include "common.h"
 
 #include <Jolt/Physics/Collision/Shape/Shape.h>
@@ -85,8 +86,19 @@ struct SetMaterials {
     std::vector<float> restitution;
 };
 
+// Removes bodies and adds others in one tick, as ground streamed around a
+// focus swaps tiles.
+struct SwapBodies {
+    RemoveBodies remove;
+    AddBodies add;
+};
+
 using Command = std::variant<AddBodies, RemoveBodies, SetTransforms, SetVelocities, AddPushes,
-                             SetGravity, Activate, SetMotionTypes, SetMaterials>;
+                             SetGravity, Activate, SetMotionTypes, SetMaterials, SwapBodies,
+                             AddCharacter, RemoveCharacters, CharacterOps, SetCharacterIgnore>;
+
+// The uids a batch takes when it is submitted: one a body it adds, one a character.
+uint32_t uids_wanted(const Command &command);
 
 struct Batch {
     uint64_t seq = 0;
@@ -99,9 +111,9 @@ struct Batch {
 // replay that submits the same batches in the same order gets the same uids.
 class CommandQueue {
 public:
-    // Appends the batch and returns its sequence number. For an AddBodies
-    // batch, `uid_count` consecutive uids are assigned first, written into the
-    // batch, and the first is stored in `first_uid`.
+    // Appends the batch and returns its sequence number. For a batch that adds
+    // bodies or a character, `uid_count` consecutive uids are assigned first,
+    // written into the batch, and the first is stored in `first_uid`.
     uint64_t push(Batch &&batch, uint32_t uid_count = 0, Uid *first_uid = nullptr);
     // Moves every batch due at `tick` into `out`, in sequence order.
     void take_due(uint64_t tick, std::vector<Batch> &out);

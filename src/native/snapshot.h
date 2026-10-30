@@ -36,10 +36,25 @@ struct SnapshotBuffer {
     std::vector<uint8_t> motion;        // (rows,) Motion
     std::vector<uint32_t> changed;      // ascending rows written by this tick
 
+    // Characters, every row written each tick, in ascending id.
+    uint32_t characters = 0;
+    std::vector<Uid> char_id;
+    std::vector<double> char_position;      // (n, 3) capsule centre, metres
+    std::vector<float> char_velocity;       // (n, 3) m/s over the last tick
+    std::vector<uint8_t> char_state;        // CharacterState
+    std::vector<uint8_t> char_grounded;
+    std::vector<Uid> char_ground;           // uid of the body underfoot; 0 for none
+    std::vector<float> char_ground_normal;  // (n, 3)
+    std::vector<float> char_slide;          // slide progress, 0 to 1
+    std::vector<float> char_landing;        // speed of the last landing, m/s
+    std::vector<uint32_t> char_landed_tick; // tick of the last landing; 0 for none
+    std::vector<float> char_height;         // capsule height, metres
+
     bool written = false;
     uint64_t written_tick = 0;
 
     void resize(uint32_t count);
+    void resize_characters(uint32_t count);
 };
 
 // Owned by the world thread.

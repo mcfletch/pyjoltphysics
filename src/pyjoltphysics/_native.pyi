@@ -65,6 +65,42 @@ class Snapshot:
     def motion_type(self) -> Annotated[NDArray[numpy.uint8], dict(shape=(None,), writable=False)]: ...
 
     @property
+    def character_count(self) -> int: ...
+
+    @property
+    def character_id(self) -> Annotated[NDArray[numpy.uint32], dict(shape=(None,), writable=False)]: ...
+
+    @property
+    def character_position(self) -> Annotated[NDArray[numpy.float64], dict(shape=(None, 3), writable=False)]: ...
+
+    @property
+    def character_velocity(self) -> Annotated[NDArray[numpy.float32], dict(shape=(None, 3), writable=False)]: ...
+
+    @property
+    def character_state(self) -> Annotated[NDArray[numpy.uint8], dict(shape=(None,), writable=False)]: ...
+
+    @property
+    def character_grounded(self) -> Annotated[NDArray[numpy.uint8], dict(shape=(None,), writable=False)]: ...
+
+    @property
+    def character_ground(self) -> Annotated[NDArray[numpy.uint32], dict(shape=(None,), writable=False)]: ...
+
+    @property
+    def character_ground_normal(self) -> Annotated[NDArray[numpy.float32], dict(shape=(None, 3), writable=False)]: ...
+
+    @property
+    def character_slide(self) -> Annotated[NDArray[numpy.float32], dict(shape=(None,), writable=False)]: ...
+
+    @property
+    def character_landing(self) -> Annotated[NDArray[numpy.float32], dict(shape=(None,), writable=False)]: ...
+
+    @property
+    def character_landed_tick(self) -> Annotated[NDArray[numpy.uint32], dict(shape=(None,), writable=False)]: ...
+
+    @property
+    def character_height(self) -> Annotated[NDArray[numpy.float32], dict(shape=(None,), writable=False)]: ...
+
+    @property
     def changed(self) -> Annotated[NDArray[numpy.uint32], dict(shape=(None,), writable=False)]: ...
 
 class World:
@@ -76,6 +112,34 @@ class World:
         """
         Queue bodies to add; return their uids and the batch's sequence number.
         """
+
+    def swap_bodies(self, remove: Annotated[NDArray[numpy.uint32], dict(shape=(None,), order='C', device='cpu', writable=False)], position: Annotated[NDArray[numpy.float64], dict(shape=(None, 3), order='C', device='cpu', writable=False)], orientation: Annotated[NDArray[numpy.float64], dict(shape=(None, 4), order='C', device='cpu', writable=False)], shape_kind: Annotated[NDArray[numpy.uint8], dict(shape=(None,), order='C', device='cpu', writable=False)], shape_params: Annotated[NDArray[numpy.float64], dict(shape=(None, 4), order='C', device='cpu', writable=False)], shape_id: Annotated[NDArray[numpy.uint32], dict(shape=(None,), order='C', device='cpu', writable=False)], scale: Annotated[NDArray[numpy.float64], dict(shape=(None, 3), order='C', device='cpu', writable=False)], shape_offset: Annotated[NDArray[numpy.float64], dict(shape=(None, 3), order='C', device='cpu', writable=False)], shape_rotation: Annotated[NDArray[numpy.float64], dict(shape=(None, 4), order='C', device='cpu', writable=False)], center_of_mass: Annotated[NDArray[numpy.float64], dict(shape=(None, 3), order='C', device='cpu', writable=False)], motion: Annotated[NDArray[numpy.uint8], dict(shape=(None,), order='C', device='cpu', writable=False)], mass: Annotated[NDArray[numpy.float64], dict(shape=(None,), order='C', device='cpu', writable=False)], density: Annotated[NDArray[numpy.float64], dict(shape=(None,), order='C', device='cpu', writable=False)], friction: Annotated[NDArray[numpy.float32], dict(shape=(None,), order='C', device='cpu', writable=False)], restitution: Annotated[NDArray[numpy.float32], dict(shape=(None,), order='C', device='cpu', writable=False)], linear_damping: Annotated[NDArray[numpy.float32], dict(shape=(None,), order='C', device='cpu', writable=False)], angular_damping: Annotated[NDArray[numpy.float32], dict(shape=(None,), order='C', device='cpu', writable=False)], gravity_factor: Annotated[NDArray[numpy.float32], dict(shape=(None,), order='C', device='cpu', writable=False)], linear_velocity: Annotated[NDArray[numpy.float64], dict(shape=(None, 3), order='C', device='cpu', writable=False)], angular_velocity: Annotated[NDArray[numpy.float64], dict(shape=(None, 3), order='C', device='cpu', writable=False)], group: Annotated[NDArray[numpy.uint32], dict(shape=(None,), order='C', device='cpu', writable=False)], mask: Annotated[NDArray[numpy.uint32], dict(shape=(None,), order='C', device='cpu', writable=False)], flags: Annotated[NDArray[numpy.uint32], dict(shape=(None,), order='C', device='cpu', writable=False)], at_tick: int = 0) -> tuple[Annotated[NDArray[numpy.uint32], dict(shape=(None,))], int]:
+        """
+        Queue removing bodies and adding others in one tick; return the new uids and the sequence number.
+        """
+
+    def raycast_batch(self, origins: Annotated[NDArray[numpy.float64], dict(shape=(None, 3), order='C', device='cpu', writable=False)], directions: Annotated[NDArray[numpy.float64], dict(shape=(None, 3), order='C', device='cpu', writable=False)], max_distance: float, group: int, mask: int, exclude: Annotated[NDArray[numpy.uint32], dict(shape=(None,), order='C', device='cpu', writable=False)], triggers: bool, characters: bool) -> tuple[Annotated[NDArray[numpy.uint8], dict(shape=(None,))], Annotated[NDArray[numpy.uint32], dict(shape=(None,))], Annotated[NDArray[numpy.float32], dict(shape=(None,))], Annotated[NDArray[numpy.float64], dict(shape=(None, 3))], Annotated[NDArray[numpy.float32], dict(shape=(None, 3))], Annotated[NDArray[numpy.uint32], dict(shape=(None,))]]:
+        """
+        Cast rays; return (hit, uid, fraction, point, normal, sub_shape) arrays.
+        """
+
+    def cast_shape(self, kind: int, params: Sequence[float], shape_id: int, start: Sequence[float], rotation: Sequence[float], end: Sequence[float], all_hits: bool, group: int, mask: int, exclude: Annotated[NDArray[numpy.uint32], dict(shape=(None,), order='C', device='cpu', writable=False)], triggers: bool, characters: bool) -> tuple[Annotated[NDArray[numpy.uint32], dict(shape=(None,))], Annotated[NDArray[numpy.uint32], dict(shape=(None,))], Annotated[NDArray[numpy.float32], dict(shape=(None,))], Annotated[NDArray[numpy.float32], dict(shape=(None,))], Annotated[NDArray[numpy.float64], dict(shape=(None, 3))], Annotated[NDArray[numpy.float32], dict(shape=(None, 3))]]:
+        """
+        Sweep a shape; return (uid, sub_shape, fraction, depth, point, normal) arrays, one row a body hit.
+        """
+
+    def overlap(self, kind: int, params: Sequence[float], shape_id: int, position: Sequence[float], rotation: Sequence[float], group: int, mask: int, exclude: Annotated[NDArray[numpy.uint32], dict(shape=(None,), order='C', device='cpu', writable=False)], triggers: bool, characters: bool) -> Annotated[NDArray[numpy.uint32], dict(shape=(None,))]:
+        """Return the ascending uids of the bodies a shape at a pose touches."""
+
+    def add_character(self, position: Sequence[float], caps: Annotated[NDArray[numpy.float64], dict(shape=(None,), order='C', device='cpu', writable=False)], bits: int, gravity: float, group: int, mask: int, pass_group: int, proxy: bool, ignore: Annotated[NDArray[numpy.uint32], dict(shape=(None,), order='C', device='cpu', writable=False)], at_tick: int = 0) -> tuple[int, int]:
+        """Queue a character; return its id and the batch's sequence number."""
+
+    def remove_characters(self, ids: Annotated[NDArray[numpy.uint32], dict(shape=(None,), order='C', device='cpu', writable=False)], at_tick: int = 0) -> int: ...
+
+    def character_ops(self, ids: Annotated[NDArray[numpy.uint32], dict(shape=(None,), order='C', device='cpu', writable=False)], ops: Annotated[NDArray[numpy.uint8], dict(shape=(None,), order='C', device='cpu', writable=False)], codes: Annotated[NDArray[numpy.uint8], dict(shape=(None,), order='C', device='cpu', writable=False)], values: Annotated[NDArray[numpy.float64], dict(shape=(None, 4), order='C', device='cpu', writable=False)], at_tick: int = 0) -> int:
+        """Queue character inputs, applied in order at the next tick."""
+
+    def set_character_ignore(self, id: int, ignore: Annotated[NDArray[numpy.uint32], dict(shape=(None,), order='C', device='cpu', writable=False)], at_tick: int = 0) -> int: ...
 
     def add_convex(self, points: Annotated[NDArray[numpy.float64], dict(shape=(None, 3), order='C', device='cpu', writable=False)], max_convex_radius: float, hull_tolerance: float) -> int:
         """Build and register a convex hull; return its shape id."""

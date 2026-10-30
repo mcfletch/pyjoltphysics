@@ -16,7 +16,7 @@ from pyjoltphysics.bodies import BodyBatch
 from pyjoltphysics.enums import MotionType
 from pyjoltphysics.world import Snapshot, World
 
-__all__ = ['Digest', 'MakeWorld', 'floor', 'grid', 'pose_digest']
+__all__ = ['Digest', 'MakeWorld', 'character_digest', 'floor', 'grid', 'pose_digest']
 
 #: The ``make_world(**settings)`` factory the test suites' fixture returns.
 MakeWorld = Callable[..., World]
@@ -59,4 +59,23 @@ def pose_digest(snapshot: Snapshot, digest: D) -> D:
     out.update(np.ascontiguousarray(snapshot.uid[order]).tobytes())
     out.update(np.ascontiguousarray(snapshot.position[order]).tobytes())
     out.update(np.ascontiguousarray(snapshot.orientation[order]).tobytes())
+    return out
+
+
+def character_digest(snapshot: Snapshot, digest: D) -> D:
+    """Return ``digest`` updated with every character's id, position, velocity, state and ground.
+
+    The body poses go in too, by :func:`pose_digest`.
+    """
+    out = pose_digest(snapshot, digest)
+    rows = snapshot.characters
+    for array in (
+        rows.id,
+        rows.position,
+        rows.velocity,
+        rows.state,
+        rows.ground_uid,
+        rows.slide_progress,
+    ):
+        out.update(np.ascontiguousarray(array).tobytes())
     return out

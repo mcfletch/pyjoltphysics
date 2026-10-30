@@ -16,6 +16,21 @@ void SnapshotBuffer::resize(uint32_t count) {
     motion.resize(count);
 }
 
+void SnapshotBuffer::resize_characters(uint32_t count) {
+    characters = count;
+    char_id.resize(count);
+    char_position.resize(size_t(count) * 3);
+    char_velocity.resize(size_t(count) * 3);
+    char_state.resize(count);
+    char_grounded.resize(count);
+    char_ground.resize(count);
+    char_ground_normal.resize(size_t(count) * 3);
+    char_slide.resize(count);
+    char_landing.resize(count);
+    char_landed_tick.resize(count);
+    char_height.resize(count);
+}
+
 void SnapshotPublisher::mark(uint32_t row) {
     if (mark_stamp_.size() <= row)
         mark_stamp_.resize(size_t(row) + 1024, 0);

@@ -37,6 +37,11 @@ public:
     // The same group and mask with the other motion class, for set_motion_type.
     JPH::ObjectLayer with_motion(JPH::ObjectLayer current, bool moving);
     size_t size() const { return entries_.size(); }
+    // Whether a query or a character of this group and mask meets bodies of `layer`.
+    bool meets(JPH::ObjectLayer layer, uint32_t group, uint32_t mask) const {
+        const Entry &e = entries_[layer];
+        return (e.group & mask) != 0 && (group & e.mask) != 0;
+    }
 
     JPH::uint GetNumBroadPhaseLayers() const override { return broadphase::kCount; }
     JPH::BroadPhaseLayer GetBroadPhaseLayer(JPH::ObjectLayer layer) const override {

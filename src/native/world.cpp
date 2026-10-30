@@ -52,6 +52,7 @@ WorldCore::WorldCore(const WorldSettings &settings)
     system_.SetContactListener(&collector_);
     system_.SetBodyActivationListener(&collector_);
     row_of_index_.assign(settings.max_bodies, kNoRow);
+    characters_ = std::make_unique<CharacterSystem>(system_, layers_, settings.threads);
 }
 
 WorldCore::~WorldCore() {
@@ -59,8 +60,8 @@ WorldCore::~WorldCore() {
         thread_.detach();
     {
         JPH::BodyInterface &bodies = system_.GetBodyInterfaceNoLock();
-        std::vector<JPH::BodyID> ids;
-        ids.reserve(rows_.size());
+        std::vector<JPH::BodyID> ids = characters_->remove_all();
+        ids.reserve(ids.size() + rows_.size());
         for (const Row &row : rows_)
             ids.push_back(row.id);
         if (!ids.empty()) {
@@ -74,9 +75,8 @@ WorldCore::~WorldCore() {
 
 uint64_t WorldCore::submit(Command &&command, uint64_t at_tick, Uid *first_uid) {
     check();
-    uint32_t uid_count = 0;
-    if (auto *add = std::get_if<AddBodies>(&command)) {
-        uid_count = uint32_t(add->shapes.size());
+    const uint32_t uid_count = uids_wanted(command);
+    if (uid_count) {
         const int64_t after = reserved_bodies_.fetch_add(uid_count) + uid_count;
         if (after > int64_t(settings_.max_bodies)) {
             reserved_bodies_.fetch_sub(uid_count);
@@ -238,7 +238,7 @@ bool WorldCore::lockstep() const {
 // tick count stands still, so the callable runs when other work or run_ticks
 // brings the world to its tick.
 bool WorldCore::busy() const {
-    return !queue_.empty() || callbacks_.any_step() ||
+    return !queue_.empty() || callbacks_.any_step() || !characters_->empty() ||
            callbacks_.earliest_at_tick.load() <= tick_.load() ||
            system_.GetNumActiveBodies(JPH::EBodyType::RigidBody) > 0;
 }
@@ -466,6 +466,7 @@ bool WorldCore::tick_once() {
         apply(batch, index);
         note_applied(batch.seq);
     }
+    characters_->flush_events(tick_events_);
     if (!due_.empty()) {
         std::lock_guard<std::mutex> guard(applied_lock_);
         for (const Batch &batch : due_) {
@@ -486,6 +487,8 @@ bool WorldCore::tick_once() {
     }
     exclusive.lock();
     const auto t2 = Clock::now();
+    characters_->step(dt_, uint32_t(index + 1), *jobs_, tick_events_);
+    const auto t2b = Clock::now();
     system_.Update(float(dt_), settings_.collision_steps, temp_.get(), jobs_.get());
     const auto t3 = Clock::now();
     exclusive.unlock();
@@ -513,7 +516,8 @@ bool WorldCore::tick_once() {
     {
         std::lock_guard<std::mutex> guard(stats_lock_);
         sums_.apply_ms += seconds(t1 - t0);
-        sums_.step_ms += seconds(t3 - t2);
+        sums_.characters_ms += seconds(t2b - t2);
+        sums_.step_ms += seconds(t3 - t2b);
         sums_.events_ms += seconds(t4 - t3);
         sums_.publish_ms += seconds(t5 - t4);
         sums_.callbacks_ms += python_s;
@@ -563,6 +567,7 @@ void WorldCore::publish(uint64_t tick) {
             out.awake[row] = body->IsActive() ? 1 : 0;
             out.motion[row] = uint8_t(body->GetMotionType());
         });
+    characters_->write(*buffer);
     pool_size_ = publisher_.pool_size();
     std::lock_guard<std::mutex> guard(publish_lock_);
     published_ = std::move(buffer);
@@ -587,6 +592,7 @@ WorldStats WorldCore::stats() const {
     if (out.timed_ticks) {
         const double per = 1e3 / double(out.timed_ticks);
         out.apply_ms *= per;
+        out.characters_ms *= per;
         out.step_ms *= per;
         out.events_ms *= per;
         out.publish_ms *= per;
@@ -599,7 +605,12 @@ WorldStats WorldCore::stats() const {
     out.rejected = rejected_.load();
     out.pool = pool_size_.load();
     out.bodies = applied_bodies_.load();
-    out.queued_bodies = size_t(std::max<int64_t>(0, reserved_bodies_.load())) - out.bodies;
+    out.characters = applied_characters_.load();
+    out.queued_bodies =
+        size_t(std::max<int64_t>(0, reserved_bodies_.load())) - out.bodies - out.characters;
+    out.queries = queries_.load();
+    out.query_wait_ms = out.queries ? 1e-6 * double(query_wait_ns_.load()) / double(out.queries) : 0.0;
+    out.query_wait_max_ms = 1e-6 * double(query_wait_max_ns_.load());
     out.shapes = shapes_.registered();
     out.broadphase_optimizations = optimizations_.load();
     {
@@ -613,6 +624,9 @@ WorldStats WorldCore::stats() const {
 void WorldCore::reset_stats() {
     std::lock_guard<std::mutex> guard(stats_lock_);
     sums_ = WorldStats();
+    queries_ = 0;
+    query_wait_ns_ = 0;
+    query_wait_max_ns_ = 0;
 }
 
 // -- the registry, atexit and fork ----------------------------------------------------

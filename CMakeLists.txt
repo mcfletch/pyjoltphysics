@@ -72,10 +72,12 @@ set(PYJOLTPHYSICS_SOURCES
   src/native/apply.cpp
   src/native/bind_world.cpp
   src/native/callbacks.cpp
+  src/native/characters.cpp
   src/native/commands.cpp
   src/native/events.cpp
   src/native/jolt_setup.cpp
   src/native/layers.cpp
+  src/native/queries.cpp
   src/native/shapes.cpp
   src/native/snapshot.cpp
   src/native/world.cpp)

@@ -4,15 +4,33 @@
 
 namespace pj {
 
+uint32_t uids_wanted(const Command &command) {
+    if (auto *add = std::get_if<AddBodies>(&command))
+        return uint32_t(add->shapes.size());
+    if (auto *swap = std::get_if<SwapBodies>(&command))
+        return uint32_t(swap->add.shapes.size());
+    if (std::holds_alternative<AddCharacter>(command))
+        return 1;
+    return 0;
+}
+
 uint64_t CommandQueue::push(Batch &&batch, uint32_t uid_count, Uid *first_uid) {
     std::lock_guard<std::mutex> guard(lock_);
     if (uid_count) {
         if (uint64_t(next_uid_) + uid_count > std::numeric_limits<Uid>::max())
             throw std::length_error("the world has assigned every 32-bit body uid");
-        auto &uids = std::get<AddBodies>(batch.command).uids;
-        uids.resize(uid_count);
-        for (uint32_t i = 0; i < uid_count; ++i)
-            uids[i] = next_uid_ + i;
+        std::vector<Uid> *uids = nullptr;
+        if (auto *add = std::get_if<AddBodies>(&batch.command))
+            uids = &add->uids;
+        else if (auto *swap = std::get_if<SwapBodies>(&batch.command))
+            uids = &swap->add.uids;
+        if (uids != nullptr) {
+            uids->resize(uid_count);
+            for (uint32_t i = 0; i < uid_count; ++i)
+                (*uids)[i] = next_uid_ + i;
+        } else if (auto *character = std::get_if<AddCharacter>(&batch.command)) {
+            character->uid = next_uid_;
+        }
         if (first_uid)
             *first_uid = next_uid_;
         next_uid_ += uid_count;

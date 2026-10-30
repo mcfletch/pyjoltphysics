@@ -38,6 +38,8 @@ constexpr uint32_t kSmoothEdges = 1u << 5;  // Jolt's enhanced internal edge rem
 // carries this flag.
 constexpr uint32_t kNoSmoothEdges = 1u << 6;
 constexpr uint32_t kAll = (1u << 7) - 1;
+// A character's proxy body; set by the world, never by a batch.
+constexpr uint32_t kCharacter = 1u << 8;
 }  // namespace flag
 
 // Jolt's body user data: the uid in the low 32 bits and the flags above it,

@@ -35,8 +35,14 @@ class BodyInterface;
 
 namespace pj {
 
-enum class EventKind : uint8_t { Contact = 0, Trigger = 1, State = 2 };
-enum class EventPhase : uint8_t { Begin = 0, Persist = 1, End = 2, Sleep = 3, Wake = 4 };
+enum class EventKind : uint8_t { Contact = 0, Trigger = 1, State = 2, Character = 3 };
+// A character's records: begin and end of a touch with body b, a landing on
+// b (approach is the speed), a jump (approach is the launch speed), a slide
+// begun, knocked down, got up.
+enum class EventPhase : uint8_t {
+    Begin = 0, Persist = 1, End = 2, Sleep = 3, Wake = 4,
+    Land = 5, Jump = 6, Slide = 7, Down = 8, Up = 9,
+};
 enum class EndReason : uint16_t { None = 0, Removed = 1 };
 
 // The record Python reads as pyjoltphysics.EVENT_DTYPE. For a contact a is the

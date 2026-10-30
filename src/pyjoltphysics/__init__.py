@@ -6,7 +6,9 @@ arrays (:class:`BodyBatch`); each tick publishes a :class:`Snapshot` read as
 NumPy views, and contact, trigger, sleep and wake events as records of
 :data:`EVENT_DTYPE`. Shapes are boxes, spheres, capsules, cylinders, static
 planes, convex hulls, triangle meshes, height fields and compounds
-(:class:`Shape`), built once and shared by id.
+(:class:`Shape`), built once and shared by id. Rays, sweeps and overlaps run
+on the calling thread (:meth:`World.raycast`); characters
+(:meth:`World.add_character`) move on the world thread every tick.
 
 >>> import pyjoltphysics
 >>> pyjoltphysics.jolt_version()
@@ -21,8 +23,17 @@ import dataclasses
 
 from pyjoltphysics import _native
 from pyjoltphysics.bodies import BodyBatch, ShapeRef, heightfield_tiles
+from pyjoltphysics.characters import (
+    Character,
+    CharacterCapabilities,
+    CharacterOp,
+    CharacterRows,
+    CharacterState,
+    MoveMode,
+)
 from pyjoltphysics.enums import BodyFlag, EndReason, EventKind, EventPhase, MotionType, ShapeKind
 from pyjoltphysics.events import EVENT_DTYPE, event_times
+from pyjoltphysics.queries import ALL_GROUPS, QueryFilter, RayHit, RayHits, ShapeHit
 from pyjoltphysics.settings import WorldSettings
 from pyjoltphysics.shapes import Shape, ShapeInfo, heightfield_side
 from pyjoltphysics.world import (
@@ -104,6 +115,19 @@ __all__ = [
     'ShapeRef',
     'heightfield_side',
     'heightfield_tiles',
+    # queries
+    'ALL_GROUPS',
+    'QueryFilter',
+    'RayHit',
+    'RayHits',
+    'ShapeHit',
+    # characters
+    'Character',
+    'CharacterCapabilities',
+    'CharacterOp',
+    'CharacterRows',
+    'CharacterState',
+    'MoveMode',
     # events
     'EVENT_DTYPE',
     'EndReason',

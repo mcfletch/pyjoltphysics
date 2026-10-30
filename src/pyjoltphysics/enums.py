@@ -82,6 +82,8 @@ class EventKind(enum.IntEnum):
     TRIGGER = 1
     #: A body falling asleep or waking; ``a`` is the body and ``b`` is 0.
     STATE = 2
+    #: A character's record; ``a`` is the character.
+    CHARACTER = 3
 
 
 class EventPhase(enum.IntEnum):
@@ -92,6 +94,16 @@ class EventPhase(enum.IntEnum):
     END = 2
     SLEEP = 3
     WAKE = 4
+    #: A character landed on body ``b``; ``approach`` is the landing speed.
+    LAND = 5
+    #: A character jumped; ``approach`` is the launch speed.
+    JUMP = 6
+    #: A character began a slide.
+    SLIDE = 7
+    #: A character was knocked down.
+    DOWN = 8
+    #: A character got up.
+    UP = 9
 
 
 class EndReason(enum.IntEnum):
