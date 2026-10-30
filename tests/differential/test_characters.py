@@ -231,3 +231,19 @@ def test_a_fall_from_five_metres_lands_at_the_same_tick_in_both() -> None:
     assert jolt.feet[-1, 1] == pytest.approx(omi_.feet[-1, 1], abs=0.03)
     falling = ~jolt.grounded & ~omi_.grounded
     assert np.abs(jolt.feet[falling, 1] - omi_.feet[falling, 1]).max() < 1e-6
+
+
+def test_a_ledge_twice_the_step_height_is_refused_by_jolt_and_climbed_by_omi() -> None:
+    """A divergence: running into a 0.6 m ledge with a 0.35 m step height.
+
+    Jolt's character is stopped at the face, as the step height says. omi's
+    controller is lifted onto the ledge by its depenetration over the edge.
+    """
+    floor = ((60.0, 1.0, 60.0), (0.0, -0.5, 0.0))
+    ledge = ((40.0, 0.6, 40.0), (21.5, 0.3, 0.0))
+    jolt, omi_ = both(
+        Ground(boxes=[floor, ledge]), (0.0, 0.0, 0.0), 3.0, move=(1.0, 0.0, 0.0), mode='run'
+    )
+    assert jolt.feet[-1, 1] == pytest.approx(0.0, abs=0.02)
+    assert jolt.feet[-1, 0] < 1.5 - 0.3 + 0.05
+    assert omi_.feet[-1, 1] == pytest.approx(0.6, abs=0.02)
