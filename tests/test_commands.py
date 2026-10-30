@@ -286,3 +286,64 @@ def test_mismatched_lengths_are_refused(make_world: MakeWorld) -> None:
         world.set_velocities([1, 2], linear=np.zeros((3, 3)))
     with pytest.raises(ValueError, match='shape'):
         world.add_bodies(BodyBatch.spheres(np.zeros((2, 3)), radius=[0.5, 0.5, 0.5]))
+
+
+def test_groups_and_masks_decide_which_bodies_collide(make_world: MakeWorld) -> None:
+    world = make_world(threads=1)
+    world.add_bodies(floor())
+    # Group 2 does not collide with group 1, which the floor is in.
+    (ghost,), _ = world.add_bodies(BodyBatch.boxes([(0.0, 2.0, 0.0)], group=2, mask=2))
+    (solid,), _ = world.add_bodies(BodyBatch.boxes([(3.0, 2.0, 0.0)], group=2, mask=3))
+    world.run_ticks(120)
+    snapshot = world.latest()
+    assert snapshot is not None
+    assert snapshot.position[snapshot.rows[int(ghost)], 1] < -1.0
+    assert snapshot.position[snapshot.rows[int(solid)], 1] == pytest.approx(0.5, abs=0.03)
+
+
+@pytest.mark.parametrize(
+    ('flags', 'tunnels'), [(BodyFlag.NONE, True), (BodyFlag.CONTINUOUS, False)]
+)
+def test_continuous_detection_stops_a_fast_small_body(
+    make_world: MakeWorld, flags: BodyFlag, tunnels: bool
+) -> None:
+    world = make_world(threads=1, gravity=(0.0, 0.0, 0.0))
+    world.add_bodies(BodyBatch.boxes([(0.0, 0.0, 0.0)], size=(0.05, 4.0, 4.0), motion=0))
+    (bullet,), _ = world.add_bodies(
+        BodyBatch.spheres(
+            [(-2.0, 0.0, 0.0)], radius=0.05, linear_velocity=(300.0, 0, 0), flags=flags
+        )
+    )
+    world.run_ticks(4)
+    snapshot = world.latest()
+    assert snapshot is not None
+    assert bool(snapshot.position[snapshot.rows[int(bullet)], 0] > 0.0) == tunnels
+
+
+def test_a_no_sleep_body_stays_awake(make_world: MakeWorld) -> None:
+    world = make_world(threads=1)
+    world.add_bodies(floor())
+    uids, _ = world.add_bodies(
+        BodyBatch.boxes([(0.0, 0.5, 0.0), (3.0, 0.5, 0.0)], flags=[BodyFlag.NO_SLEEP, 0])
+    )
+    world.run_ticks(300)
+    snapshot = world.latest()
+    assert snapshot is not None
+    assert snapshot.awake[snapshot.rows_of(uids)].tolist() == [True, False]
+
+
+def test_a_kinematic_body_pushes_a_dynamic_one(make_world: MakeWorld) -> None:
+    world = make_world(threads=1, gravity=(0.0, 0.0, 0.0))
+    (pusher,), _ = world.add_bodies(
+        BodyBatch.boxes(
+            [(0.0, 0.0, 0.0)], motion=MotionType.KINEMATIC, linear_velocity=(2.0, 0.0, 0.0)
+        )
+    )
+    (crate,), _ = world.add_bodies(BodyBatch.boxes([(2.0, 0.0, 0.0)]))
+    world.run_ticks(120)
+    snapshot = world.latest()
+    assert snapshot is not None
+    rows = snapshot.rows
+    assert snapshot.motion_type[rows[int(pusher)]] == MotionType.KINEMATIC
+    assert snapshot.position[rows[int(pusher)], 0] == pytest.approx(2.0, abs=1e-6)
+    assert snapshot.position[rows[int(crate)], 0] > 2.5
