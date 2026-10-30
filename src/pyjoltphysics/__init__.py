@@ -1,7 +1,11 @@
 """Jolt Physics for Python, stepped on a native thread.
 
-This release carries the build of Jolt and the binding toolchain. The world,
-its bodies and its queries follow in later releases; see the project README.
+A :class:`World` owns a Jolt physics system and a thread that steps it at a
+fixed rate. Bodies are added, changed and removed by command batches of
+arrays (:class:`BodyBatch`); each tick publishes a :class:`Snapshot` read as
+NumPy views, and contact, trigger, sleep and wake events as records of
+:data:`EVENT_DTYPE`. Shapes are boxes, spheres, capsules, cylinders and
+static planes.
 
 >>> import pyjoltphysics
 >>> pyjoltphysics.jolt_version()
@@ -15,6 +19,18 @@ from __future__ import annotations
 import dataclasses
 
 from pyjoltphysics import _native
+from pyjoltphysics.bodies import BodyBatch
+from pyjoltphysics.enums import BodyFlag, EndReason, EventKind, EventPhase, MotionType, ShapeKind
+from pyjoltphysics.events import EVENT_DTYPE, event_times
+from pyjoltphysics.settings import WorldSettings
+from pyjoltphysics.world import (
+    EventsCallback,
+    Snapshot,
+    StepCallback,
+    World,
+    WorldError,
+    WorldStopped,
+)
 
 __version__ = '0.1.0a1'
 
@@ -67,6 +83,26 @@ def selftest() -> bool:
 
 
 __all__ = [
+    # the world
+    'World',
+    'WorldSettings',
+    'WorldError',
+    'WorldStopped',
+    'Snapshot',
+    'StepCallback',
+    'EventsCallback',
+    # bodies
+    'BodyBatch',
+    'BodyFlag',
+    'MotionType',
+    'ShapeKind',
+    # events
+    'EVENT_DTYPE',
+    'EndReason',
+    'EventKind',
+    'EventPhase',
+    'event_times',
+    # the build
     'BuildOptions',
     '__version__',
     'build_options',
