@@ -35,6 +35,23 @@ jobs:
       - name: Run tox
         run: tox
 
+  # The suite against the module and Jolt built with AddressSanitizer and
+  # UndefinedBehaviorSanitizer (tox -e asan, tools/asan.sh).
+  asan:
+    name: asan · ubuntu-latest
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: true
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install tox
+        run: python -m pip install --upgrade pip tox
+      - name: Run tox -e asan
+        run: tox -e asan
+
   # A wheel per platform and interpreter, each installed and tested by
   # cibuildwheel in its own environment (`test-command` in pyproject.toml).
   #
