@@ -1,0 +1,104 @@
+name: release
+
+# Every push to main runs the whole test workflow, wheels and sdist included;
+# if it is green *and* the version in src/pyjoltphysics/__init__.py is not
+# already on PyPI, the wheels and the sdist that workflow built and tested are
+# published there by trusted publishing.
+#
+# So a push that does not bump the version is an ordinary CI run, and bumping
+# the version is what cuts a release. Nothing is published from a red build:
+# PyPI versions are immutable.
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+jobs:
+  # The test workflow is called rather than duplicated, so the gate cannot drift
+  # from the checks, and the distributions published are the ones it tested.
+  tests:
+    uses: ./.github/workflows/test.yml
+
+  version:
+    name: version
+    needs: tests
+    runs-on: ubuntu-latest
+    outputs:
+      publish: ${{ steps.check.outputs.publish }}
+      version: ${{ steps.check.outputs.version }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - id: check
+        name: Is this version already on PyPI?
+        run: |
+          VERSION=$(python - <<'EOF'
+          import pathlib, re, sys
+          text = pathlib.Path('src/pyjoltphysics/__init__.py').read_text(encoding='utf-8')
+          found = re.search(r'''^__version__\s*=\s*['"]([^'"]+)['"]''', text, re.M)
+          if not found:
+              sys.exit('no __version__ in src/pyjoltphysics/__init__.py')
+          print(found.group(1))
+          EOF
+          )
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+
+          # Only 200 and 404 are answers. Anything else (a 5xx, a timeout, a
+          # DNS failure) means PyPI did not answer, and guessing "not
+          # published" would turn an outage into a failed upload against an
+          # immutable version. The job fails and a re-run settles it.
+          CODE=$(curl -sS -o /dev/null -w '%{http_code}' --retry 3 --retry-delay 5 \
+                 "https://pypi.org/pypi/pyjoltphysics/$VERSION/json" || echo 000)
+          case "$CODE" in
+            200)
+              echo "pyjoltphysics $VERSION is already on PyPI; nothing to publish."
+              echo "publish=false" >> "$GITHUB_OUTPUT"
+              ;;
+            404)
+              echo "pyjoltphysics $VERSION is not on PyPI; it will be published."
+              echo "publish=true" >> "$GITHUB_OUTPUT"
+              ;;
+            *)
+              echo "PyPI answered HTTP $CODE for pyjoltphysics $VERSION; refusing to guess."
+              exit 1
+              ;;
+          esac
+
+  publish:
+    name: publish to PyPI
+    needs: [tests, version]
+    # Stating the results as well as the `needs:` keeps the guarantee if
+    # someone later adds `always()` to a job: a red or partial build never
+    # reaches PyPI.
+    if: >-
+      needs.tests.result == 'success' &&
+      needs.version.outputs.publish == 'true'
+    runs-on: ubuntu-latest
+
+    # Trusted publishing (OIDC): on PyPI, add a publisher for this repository
+    # with workflow `release.yml` and the environment field left blank. The
+    # OIDC claim carries no environment, so a publisher that names one does
+    # not match and the upload is rejected. No API token is stored anywhere.
+    permissions:
+      id-token: write
+
+    steps:
+      - name: Collect the wheels and the sdist the tests built
+        uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+
+      - name: Confirm the sdist carries the version that was checked
+        env:
+          EXPECTED: ${{ needs.version.outputs.version }}
+        run: test -f "dist/pyjoltphysics-$EXPECTED.tar.gz"
+
+      - name: Publish
+        uses: pypa/gh-action-pypi-publish@release/v1
+        with:
+          # A re-run of an already-published commit is a no-op.
+          skip-existing: true

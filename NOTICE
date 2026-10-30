@@ -1,0 +1,15 @@
+pyjoltphysics
+Copyright (c) 2026 Mike C. Fletcher and Contributors
+Licensed under the MIT License; see LICENSE.
+
+The compiled module contains third-party code:
+
+* Jolt Physics, tag v5.6.0 (commit e77f175595e64cb44218cc9d9d56fc365ad0e36a,
+  https://github.com/jrouwe/JoltPhysics), unmodified, as the git submodule
+  extern/JoltPhysics. Copyright 2021 Jorrit Rouwe. Licensed under the MIT
+  License; see extern/JoltPhysics/LICENSE.
+
+* The nanobind runtime library (https://github.com/wjakob/nanobind), compiled
+  into the module from the nanobind package the build uses.
+  Copyright (c) 2022 Wenzel Jakob. Licensed under the BSD 3-Clause License;
+  see LICENSES/nanobind-LICENSE.

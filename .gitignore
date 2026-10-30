@@ -1,0 +1,16 @@
+*.so
+*.pyd
+build/
+dist/
+wheelhouse/
+__pycache__/
+*.egg-info/
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+.oglc-check-cache/
+.tox/
+.coverage
+.coverage.*
+htmlcov/
+uv.lock

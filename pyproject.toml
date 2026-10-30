@@ -1,0 +1,191 @@
+[build-system]
+# The module is C++17 over Jolt Physics, compiled by CMake under
+# scikit-build-core, with nanobind as the binding. Jolt is a git submodule at
+# extern/JoltPhysics; the sdist carries its library sources.
+requires = ["scikit-build-core>=0.11", "nanobind>=3.1,<4"]
+build-backend = "scikit_build_core.build"
+
+[project]
+name = "pyjoltphysics"
+# Read from src/pyjoltphysics/__init__.py -- see [tool.scikit-build.metadata].
+# .github/workflows/release.yml decides whether to publish by reading
+# `__version__`, so there is one definition of it.
+dynamic = ["version"]
+description = "Jolt Physics for Python, stepped on a native thread"
+readme = "README.md"
+# This project's own code is MIT. The compiled module also carries Jolt
+# Physics (MIT) and the nanobind runtime (BSD-3-Clause).
+license = "MIT AND BSD-3-Clause"
+license-files = [
+    "LICENSE",
+    "NOTICE",
+    "extern/JoltPhysics/LICENSE",
+    "LICENSES/nanobind-LICENSE",
+]
+requires-python = ">=3.10"
+authors = [
+    { name = "Mike C. Fletcher", email = "mcfletch@vrplumber.com" }
+]
+keywords = ["physics", "jolt", "rigid body", "simulation", "games", "nanobind"]
+classifiers = [
+    "Development Status :: 2 - Pre-Alpha",
+    "Intended Audience :: Developers",
+    "Programming Language :: Python",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Programming Language :: Python :: 3.14",
+    "Programming Language :: Python :: Free Threading :: 2 - Beta",
+    "Programming Language :: Python :: Implementation :: CPython",
+    "Programming Language :: C++",
+    "Topic :: Games/Entertainment",
+    "Topic :: Scientific/Engineering :: Physics",
+]
+dependencies = []
+
+[project.optional-dependencies]
+test = [
+    "pytest",
+    # tests/test_stub.py regenerates the stub with the nanobind the module was
+    # built with.
+    "nanobind>=3.1,<4",
+]
+dev = [
+    "pyjoltphysics[test]",
+    "mypy",
+    "ruff",
+    "tox>=4.0",
+]
+
+[project.urls]
+Homepage = "https://github.com/mcfletch/pyjoltphysics"
+Repository = "https://github.com/mcfletch/pyjoltphysics"
+
+[tool.scikit-build]
+minimum-version = "build-system.requires"
+# One abi3 wheel serves CPython 3.12 and later. 3.10, 3.11 and the
+# free-threaded interpreters get a wheel each.
+wheel.py-api = "cp312"
+wheel.packages = ["src/pyjoltphysics"]
+# A build directory per wheel tag keeps an editable rebuild incremental.
+build-dir = "build/{wheel_tag}"
+cmake.build-type = "Release"
+# Only Jolt's library, its CMake files and its licence enter the sdist; the
+# samples, assets and viewer in the submodule are not built.
+sdist.exclude = [
+    "extern/JoltPhysics/*",
+    "build",
+    ".github",
+]
+sdist.include = [
+    "extern/JoltPhysics/Jolt/**",
+    "extern/JoltPhysics/Build/CMakeLists.txt",
+    "extern/JoltPhysics/LICENSE",
+    "extern/JoltPhysics/README.md",
+]
+
+[tool.scikit-build.metadata.version]
+provider = "scikit_build_core.metadata.regex"
+input = "src/pyjoltphysics/__init__.py"
+
+[tool.pytest.ini_options]
+# ``src`` is on testpaths so that the worked examples in the module docstrings
+# are run. ``importlib`` import mode lets doctest run against a checkout whose
+# package is also installed non-editably.
+testpaths = ["tests", "src"]
+addopts = "-ra --doctest-modules --import-mode=importlib"
+
+[tool.openglcontext-checks]
+# The OGC rules (openglcontext-checks) this project is clean of, held by the
+# workspace preflight.
+select = [
+    "OGC101", "OGC102", "OGC111", "OGC121", "OGC131", "OGC141", "OGC151",
+    "OGC161", "OGC201", "OGC221", "OGC222", "OGC223", "OGC232",
+]
+# Jolt's own tree is third-party code and is not checked.
+exclude = ["extern"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py310"
+extend-exclude = ["extern", "build"]
+
+[tool.ruff.lint]
+select = [
+    "E", "W", "F", "B",
+    "ARG",  # unused arguments
+    "I",    # import order
+    "UP",   # constructs superseded by the minimum Python
+    "SIM",  # simplifications
+    "C4",   # comprehensions
+    "RUF",
+    "PGH003", "PGH004",  # a type: ignore or noqa names the codes it silences
+    "PLE0604", "PLE0605",  # __all__ is a list or tuple of strings
+    "S110", "S112", "TRY400",  # an error that is caught is not silently dropped
+    "DTZ",  # datetimes carry a timezone
+    "S102", "S202", "S301", "S307",  # no exec, eval, pickle or unchecked tar extraction
+    "BLE001",  # a bare `except Exception` is a boundary that says why
+    "S310",  # a URL is opened only once its scheme is known
+    "PLC0415",  # imports at the top of a module
+    "SLF001",  # a private name is reached only by a white-box test that says why
+]
+ignore = [
+    "E501",   # line too long: held by the formatter's line-length, above
+    "E741",   # ambiguous variable name
+    "RUF005", # concatenation is clearer than unpacking for short literal joins
+    # Diagnostics use ``%`` formatting throughout: house style across the stack.
+    "UP031",
+    # ``__all__`` is grouped by what each name is for, with a comment per group.
+    "RUF022",
+]
+
+[tool.ruff.lint.per-file-ignores]
+# A test that pins an error signature calls the thing that raises, and
+# `pytest.raises` is the assertion, so its result is unused.
+"tests/*" = ["ARG001", "ARG002"]
+# The stub is nanobind's output, committed as generated.
+"src/pyjoltphysics/_native.pyi" = ["ALL"]
+
+[tool.ruff.format]
+quote-style = "single"
+exclude = ["*.md", "extern", "src/pyjoltphysics/_native.pyi"]
+
+[tool.mypy]
+python_version = "3.12"
+strict = true
+warn_unused_ignores = true
+
+[tool.cibuildwheel]
+# cibuildwheel 3.4.1, pinned in .github/workflows/test.yml: the 4.x series
+# builds no cp313t. `cp312-*` is the abi3 wheel, which cibuildwheel also
+# tests on 3.13 and 3.14 without rebuilding it.
+build = "cp310-* cp311-* cp312-* cp313-* cp314-* cp313t-* cp314t-*"
+enable = ["cpython-freethreading"]
+skip = "*-musllinux_* *_i686 *-win32"
+build-frontend = "build"
+build-verbosity = 1
+test-extras = ["test"]
+test-command = "pytest -p no:cacheprovider -q {project}/tests -o addopts="
+
+[tool.cibuildwheel.linux]
+archs = ["native"]
+
+[tool.cibuildwheel.macos]
+archs = ["native"]
+# std::shared_mutex and the rest of what the world thread uses need 10.15.
+environment = { MACOSX_DEPLOYMENT_TARGET = "10.15" }
+
+[tool.cibuildwheel.windows]
+archs = ["native"]
+
+# uv judges whether its cached build of a source tree is current from
+# pyproject.toml alone unless told otherwise.
+[tool.uv]
+cache-keys = [
+    { file = "pyproject.toml" },
+    { file = "CMakeLists.txt" },
+    { file = "src/pyjoltphysics/__init__.py" },
+    { file = "src/_native.cpp" },
+]
