@@ -439,13 +439,13 @@ two bodies meet each other (both default to every bit); bodies whose uid is in
 `exclude` are passed over; sensors are met only with `triggers=True`;
 character proxies are met unless `characters=False`.
 
-Measured (`benchmarks/characters.py`, gcc 13.3, CPython 3.14, three other
-processes busy on the 32-core machine): 100,000 scattered rays down on the
-20,000 triangle ground among 10,000 posts in one `raycast_batch`, 60 ms, 0.60
-us a ray; one `raycast` from Python, 2.3 us. Single rays from the caller while
-the world free-runs at 120 Hz with 5,000 active boxes, 8 job threads: p50 3.3
-us, p99 1.0 ms, max 2.4 ms; the wait for the lock is the rest of an `Update`
-in progress (1 job thread: p99 2.9 ms, max 9.5 ms).
+Measured (`benchmarks/characters.py`, gcc 13.3, CPython 3.14, a 32-core
+machine with a load of 3.5 from other work): 100,000 scattered rays down on
+the 20,000 triangle ground among 10,000 posts in one `raycast_batch`, 55 ms,
+0.55 us a ray; one `raycast` from Python, 2.3 us. Single rays from the caller
+while the world free-runs at 120 Hz with 5,000 active boxes, 8 job threads:
+p50 3.2 us, p99 1.1 ms, max 2.8 ms; the wait for the lock is the rest of an
+`Update` in progress (1 job thread: p99 2.5 ms, max 9.1 ms).
 
 ## Characters
 
@@ -559,10 +559,10 @@ threads, and a free-running run replays bit for bit in lockstep with 1 or 8
 job threads (tests/test_character_lockstep.py).
 
 Measured (`benchmarks/characters.py`, ms per 60 Hz frame, with proxies): 300
-characters running on a 256 x 256 height field, 1.49 ms on 1 job thread and
-0.95 ms on 8 at one tick a frame, 2.84 and 2.11 ms at 120 Hz (two ticks a
+characters running on a 256 x 256 height field, 1.48 ms on 1 job thread and
+0.60 ms on 8 at one tick a frame, 2.62 and 1.10 ms at 120 Hz (two ticks a
 frame); 30 characters among 10,000 posts on the 20,000 triangle ground, 0.17
-and 0.09 ms (0.30 and 0.19 at 120 Hz). The 300 proxies add 0.09 ms a tick to
+and 0.09 ms (0.30 and 0.19 at 120 Hz). The 300 proxies add 0.08 ms a tick to
 `PhysicsSystem::Update` on 1 job thread.
 
 Bodies moving into a character: a kinematic body (a door, a lift wall) pushes

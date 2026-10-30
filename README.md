@@ -38,11 +38,11 @@ otherwise.
 
 Rays, ray batches, shape sweeps and overlaps run on the calling thread under
 the world lock's shared side, with the GIL released: 100,000 scattered rays
-take 60 ms. Characters are omi_physics' controller over Jolt's
+take 55 ms. Characters are omi_physics' controller over Jolt's
 `CharacterVirtual` (walk, run, sprint, crouch, an exact ballistic jump,
 stairs, slopes, slides, knock-downs, landings, pushing, platforms, pass
 groups), moved on the world thread every tick and read from the snapshot; 300
-of them on a height field take 0.95 ms a 60 Hz frame on 8 job threads.
+of them on a height field take 0.60 ms a 60 Hz frame on 8 job threads.
 `swap_bodies` replaces tiles of a streamed landscape in one tick.
 `docs/API.md` describes every call.
 
