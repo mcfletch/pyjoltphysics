@@ -5,9 +5,29 @@ for Python with [nanobind](https://github.com/wjakob/nanobind). The design steps
 a Jolt `PhysicsSystem` on a native thread the module owns, takes commands as
 arrays and publishes each tick's poses as read-only NumPy views.
 
-This release, 0.1.0a1, carries the build: Jolt compiled with the options below,
-linked into the module `pyjoltphysics._native`, and three functions that report
-on it. Worlds, bodies, shapes, events and queries are not in it yet.
+```python
+>>> import numpy as np
+>>> import pyjoltphysics as pj
+>>> with pj.World(pj.WorldSettings(threads=4)) as world:
+...     floor = world.add_bodies(pj.BodyBatch.plane())
+...     uids, seq = world.add_bodies(pj.BodyBatch.boxes(np.random.uniform(0, 4, (500, 3)) + (0, 2, 0),
+...                                                     size=(0.25, 0.25, 0.25)))
+...     world.run_ticks(240)                # or world.start() to free-run at tick_hz
+...     snapshot = world.latest()           # read-only NumPy views, no copy
+...     resting = snapshot.position[snapshot.rows_of(uids), 1]
+...     events = world.drain_events()       # contact, trigger, sleep and wake records
+```
+
+A `World` steps on its own thread at `tick_hz` (120 by default) or in lockstep
+with `run_ticks(n)`. Commands are batches of arrays applied at the start of
+the next tick; each tick publishes a snapshot of every body's pose and
+velocity into a pool of reference-counted buffers, and appends one 48-byte
+record per contact begin, end and (on request) persist to an event ring.
+Callbacks run on the world thread only when registered. Shapes are boxes,
+spheres, capsules, cylinders and static planes. `docs/API.md` describes every
+call.
+
+The build information:
 
 ```python
 >>> import pyjoltphysics
@@ -54,8 +74,7 @@ pip install pyjoltphysics
 
 Wheels cover CPython 3.10 and 3.11, one abi3 wheel for CPython 3.12 and later,
 and free-threaded CPython 3.13t and 3.14t, on manylinux x86_64 and aarch64,
-macOS arm64 and x86_64, and Windows AMD64 and ARM64. The package has no
-runtime dependencies.
+macOS arm64 and x86_64, and Windows AMD64 and ARM64. The package needs NumPy.
 
 ## Build from source
 
@@ -71,8 +90,14 @@ A build needs a C++17 compiler; scikit-build-core fetches CMake and Ninja
 where the machine has none. In an existing checkout,
 `git submodule update --init` fetches Jolt.
 
+The C++ is `src/_native.cpp` (the module and its build information) and
+`src/native/`, a file per concern: `world` (the thread and the tick),
+`commands` and `apply` (batches), `snapshot`, `events`, `callbacks` (Python on
+the world thread), `layers` (collision groups), `shapes` and `bind_world` (the
+nanobind classes).
+
 An editable install keeps a build directory per wheel tag under `build/`, so
-reinstalling after a change to `src/_native.cpp` recompiles that file only:
+reinstalling after a change to a source file recompiles that file only:
 
 ```
 pip install -e '.[dev]'
@@ -93,7 +118,12 @@ the generated one differ.
 ```
 pytest
 tox                 # lint, typecheck, stubs and the suite per interpreter
+tox -e asan         # the suite against an AddressSanitizer and UBSan build (Linux, gcc)
+python benchmarks/boxes5000.py --threads 1 8
 ```
+
+`tests/test_differential.py` compares three scenes with `omi_physics` where it
+is installed, and is skipped elsewhere.
 
 ## Licence
 
