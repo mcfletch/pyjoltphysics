@@ -80,6 +80,7 @@ A frozen dataclass; every field has a default.
 | `collision_steps` | 1 | Jolt collision sub-steps a tick |
 | `temp_allocator_mb` | 16 | step scratch memory allocated up front; more comes from the heap |
 | `linear_damping`, `angular_damping` | 0.0 | 1/s, for bodies whose batch names none |
+| `static_friction_speed` | 0.05 | m/s of sliding at a contact below which a material's static friction holds |
 
 `settings.dt` is `1 / tick_hz`.
 
@@ -121,6 +122,9 @@ skipped and counted in `stats()['rejected']`.
 | `activate(uids)` | wake bodies |
 | `set_motion_types(uids, motion)` | `MotionType` per body; a static body becomes moving only if added with `BodyFlag.MOVABLE` |
 | `set_materials(uids, friction, restitution)` | new coefficients |
+| `set_body_materials(uids, material)` | material indices (below) |
+| `set_body_filters(uids, filters)` | collision filter indices (below) |
+| `set_drag(uids, drag)` | quadratic drag coefficients, 1/m |
 
 Vectors are (n, 3) arrays, or one (3,) vector for every body; quaternions are
 `(x, y, z, w)`. Values that are not finite, zero quaternions, and arrays
@@ -158,6 +162,9 @@ an array with one entry (or row) per body.
 | `gravity_factor` | 1.0 | multiplies gravity for the body |
 | `linear_velocity`, `angular_velocity` | 0 | initial m/s and rad/s |
 | `group`, `mask` | 1, 0xFFFFFFFF | 32-bit collision sets: two bodies collide when each one's group shares a bit with the other's mask |
+| `filter` | 0 | collision filter index into the world's filter table |
+| `material` | 0 | row of the world's material table; 0 is the body's own `friction` and `restitution` |
+| `quadratic_drag` | 0.0 | 1/m: a force of `-k m |v| v` |
 | `flags` | `NONE` | `BodyFlag` bits |
 
 Builders, each returning a batch, with every other field as a keyword:
@@ -297,6 +304,7 @@ mass.
 | `MOVABLE` | a static body a later `set_motion_types` may make kinematic or dynamic; needs a mass or density |
 | `SMOOTH_EDGES` | Jolt's enhanced internal edge removal: contacts with the inner edges of a mesh, height field or compound merge with the faces beside them; a static mesh or height field has it without the flag |
 | `NO_SMOOTH_EDGES` | a static mesh or height field without enhanced internal edge removal |
+| `FILTER_CONTACTS` | the world's contact filter is asked about pairs where both bodies carry it |
 
 ## Snapshots
 
@@ -333,16 +341,16 @@ asleep is in `changed` on that tick, with its final pose.
 
 | Field | Type | Meaning |
 |---|---|---|
-| `kind` | uint8 | `EventKind`: `CONTACT`, `TRIGGER`, `STATE` or `CHARACTER` |
-| `phase` | uint8 | `EventPhase`: `BEGIN`, `PERSIST`, `END`, `SLEEP` or `WAKE`; for a character also `LAND`, `JUMP`, `SLIDE`, `DOWN` and `UP` |
+| `kind` | uint8 | `EventKind`: `CONTACT`, `TRIGGER`, `STATE`, `CHARACTER` or `JOINT` |
+| `phase` | uint8 | `EventPhase`: `BEGIN`, `PERSIST`, `END`, `SLEEP` or `WAKE`; for a character also `LAND`, `JUMP`, `SLIDE`, `DOWN` and `UP`; for a joint `END` and `BREAK` |
 | `reason` | uint16 | `EndReason` of an end: `NONE`, or `REMOVED` when a body of the pair was removed |
 | `tick` | uint32 | the tick the event happened in: the tick of the first snapshot that shows it |
-| `a`, `b` | uint32 | uids: for a contact the lower uid first; for a trigger the sensor first; for sleep and wake the body, and 0; for a character the character, and the body it touched or landed on |
+| `a`, `b` | uint32 | uids: for a contact the lower uid first; for a trigger the sensor first; for sleep and wake the body, and 0; for a character the character, and the body or character it touched or landed on; for a joint the joint id, and for a break the joint's body |
 | `point` | 3 float64 | world contact point, m (begin and persist) |
 | `normal` | 3 float32 | unit vector from `a` to `b` (contact begin and persist) |
 | `approach` | float32 | closing speed along the normal at the point, m/s, positive when approaching |
-| `impulse` | float32 | estimated normal impulse, N s, in contact begin records; 0 in every other record |
-| `reserved` | uint32 | 0 |
+| `impulse` | float32 | estimated normal impulse, N s, in contact begin records; in a character begin, the momentum of a dynamic body striking it (N s); a joint break's torque, N m; 0 in every other record |
+| `material_a`, `material_b` | uint16 | contact begin and persist: the material index of each side, a mesh triangle's own where it has one |
 
 A record's simulation time is `tick / tick_hz`; `event_times(events, tick_hz)`
 computes it. The impulse is Jolt's `EstimateCollisionResponse` for the two
@@ -390,7 +398,7 @@ Character records (`kind` `CHARACTER`, `a` the character's id):
 
 | Phase | Meaning |
 |---|---|
-| `BEGIN`, `END` | the capsule began or stopped touching body `b` (within 2 cm); a begin has the point, the normal from the character to the body, and the closing speed as `approach` |
+| `BEGIN`, `END` | the capsule began or stopped touching body or character `b` (within 2 cm); a begin has the point, the normal from the character to the body, the closing speed as `approach` and, for a dynamic body, the body's mass times that speed as `impulse` |
 | `LAND` | it landed on `b` (a body's uid or another character's id); `approach` is the landing speed, m/s |
 | `JUMP` | it jumped; `approach` is the launch speed, m/s |
 | `SLIDE`, `DOWN`, `UP` | it began a slide, was knocked down, got up |
@@ -543,8 +551,13 @@ Its properties read the newest snapshot: `position` (the capsule's centre),
 id: `id` (n,) uint32, `position` (n, 3) float64, `velocity` (n, 3) float32,
 `state` (n,) uint8, `grounded` (n,) bool, `ground_uid` (n,) uint32,
 `ground_normal` (n, 3) float32, `slide_progress` (n,) float32, `landing_speed`
-(n,) float32 and `landed_tick` (n,) uint32 of the last landing, and `height`
-(n,) float32, all read-only views of the snapshot's buffer.
+(n,) float32 and `landed_tick` (n,) uint32 of the last landing, `height`
+(n,) float32, `previous` (n, 3) float64 (the centre at the tick before, for
+drawing between ticks), `eye` (n, 3) float64 (`eyeHeight` above the feet,
+scaled by the capsule's height over `standHeight`), `ground_material` (n,)
+uint16 (the material index underfoot, a mesh triangle's own where it has one)
+and `stuck` (n,) bool (the last teleport left the capsule more than 1 cm
+inside a body), all read-only views of the snapshot's buffer.
 
 Pushing. Walking into a dynamic body no heavier than `pushMass` pushes it with
 Jolt's character impulse, at most `pushForce`; a heavier body blocks. A
@@ -571,7 +584,182 @@ capsule is moved out of it as it comes in, and the character's push slows a
 body it could push; the character keeps none of the body's momentum, so a
 thrown crate shoves it while they overlap rather than knocking it back at a
 share of the crate's speed. The character's `BEGIN` record names the body and
-its closing speed for a caller that applies `knockback`.
+its closing speed, and the body's momentum at that speed as `impulse`, for a
+caller that applies `knockback`.
+
+A character inside gravity zones falls by the vertical part of the gravity
+the zones leave from its own, at its capsule's centre.
+
+## Joints
+
+```python
+door = world.add_joint(pj.Joint.hinge(panel, frame, anchor=(0, 1, 0), axis=(0, 1, 0),
+                                      limits=(0.0, 1.6)))
+wheel = world.add_joint(pj.Joint.hinge(rotor, anchor=(6, 4, 0), axis=(0, 1, 0),
+                                       motor=pj.Motor(pj.MotorMode.VELOCITY, 4.0, max=30.0)))
+world.set_joint_motors([wheel], pj.MotorMode.VELOCITY, -4.0)
+ids, seq = world.add_joints([pj.Joint.ball(link, prev, anchor=p, break_force=500.0) for ...])
+rows = world.latest().joints          # id, kind, state, value, value2, force, torque
+```
+
+A `Joint` holds `body` to `to` (0 for the world). Anchors and axes are world
+coordinates where the bodies stand when the batch is applied; each body
+carries them from then on. Joint ids are assigned at submission, from 1, and
+never reused. A joint naming a body that is not in the world when its batch is
+applied is skipped and counted in `stats()['rejected']`.
+
+| Builder | Jolt | Holds |
+|---|---|---|
+| `Joint.fixed(body, to)` | `FixedConstraint` | the pose the two have when it is made |
+| `Joint.ball(body, to, anchor=)` | `PointConstraint` | a point of each together; they turn freely |
+| `Joint.hinge(body, to, anchor=, axis=, limits=, motor=)` | `HingeConstraint` | turning about `axis`; `limits` within -pi to pi |
+| `Joint.slider(body, to, axis=, anchor=, limits=, motor=)` | `SliderConstraint` | sliding along `axis` without turning; `limits` lower <= 0 <= upper; `anchor` defaults to the body's origin |
+| `Joint.distance(body, to, anchor=, to_anchor=, length=)` | `DistanceConstraint` | the two points at `length`, a (shortest, longest) range, or as they stand |
+| `Joint.six_dof(body, to, anchor=, axis=, axis2=, lower=, upper=, motors=)` | `SixDOFConstraint` | six axes, each locked `(0, 0)`, free `(-inf, inf)` or limited |
+| `Joint.universal(body, to, anchor=, axis1=, axis2=)` | `SixDOFConstraint` | X3D's UniversalJoint: the two axes keep their angle, spin crosses |
+| `Joint.two_axis_hinge(body, to, anchor=, axis1=, axis2=, limits1=, motor1=, motor2=, suspension=)` | `SixDOFConstraint` | X3D's DoubleAxisHingeJoint: steering about `axis1`, axle `axis2`, a sprung anchor along `axis1` |
+| `Joint.motor(body, to, axes=, torques=)` | none | X3D's MotorJoint: torques (N m) about up to three axes `to` carries, each step |
+
+Every builder also takes `limit_spring` (frequency Hz, damping ratio; `(0, 0)`
+is rigid), `friction` (N or N m on the free axes), `break_force` (N),
+`break_torque` (N m) and `collide`. A `Motor(mode, target, max, frequency,
+damping)` drives towards a speed (`VELOCITY`, m/s or rad/s) or a position
+(`POSITION`, m or rad, as a spring of `frequency` and `damping`) with at most
+`max` N or N m. A six-axis joint's axes are translation x, y, z then rotation
+x, y, z of its frame, x along `axis` and y along `axis2` made square to it.
+
+| Call | Change |
+|---|---|
+| `add_joint(joint)`, `add_joints(joints)` | add; returns the id, or `(ids, seq)` |
+| `remove_joints(ids)` | remove; each makes a `JOINT` `END` record |
+| `set_joint_motors(ids, mode, target=nan, max=nan, axis=0)` | one motor axis of each; None or NaN keeps a value; a motor joint's axis 0 to 2 takes a torque as `target` |
+| `set_joints_enabled(ids, enabled)` | switch off or on; a broken joint stays broken |
+
+After each step the world reads each joint's total lambda and divides it by
+the step: `force` (N) and `torque` (N m) in the snapshot. A joint whose force
+or torque passes its limit is taken out of the world and reported once, a
+`JOINT` `BREAK` record with `a` the joint, `b` its body, `point` its anchor,
+`approach` the force and `impulse` the torque. Removing a body removes its
+joints (`END`, reason `REMOVED`). The two bodies of a joint do not collide with
+each other unless `collide`: they share a Jolt group filter that refuses the
+pair in the broad phase.
+
+`Snapshot.joints` is a `JointRows`, one row a joint in ascending id: `id`,
+`kind` (`JointKind`), `state` (`JointState`: `ACTIVE`, `DISABLED`, `BROKEN`),
+`value` (a hinge's angle, rad; a slider's position, m; a distance's length,
+m; a six-axis joint's turn about its frame's y axis), `value2` (a six-axis
+joint's turn about z), `force` and `torque`.
+
+## Materials
+
+```python
+wood = world.materials.define(friction=0.5, restitution=0.2)
+ice = world.materials.define(static_friction=0.05, dynamic_friction=0.02,
+                             friction_combine=pj.Combine.MINIMUM)
+world.materials.pair(wood, ice, friction=0.1)
+world.add_bodies(pj.BodyBatch.boxes(positions, material=wood))
+```
+
+`World.materials` is the world's `MaterialTable`; `define` returns a material
+index and `pair` sets how two materials meet. Each change is sent as a batch.
+Index 0 is a body's own `friction` and `restitution`, combined as Jolt
+combines them (the geometric mean of the frictions, the larger restitution).
+Where either side of a contact has another material, the two rows combine by
+the higher of their modes, `Combine.AVERAGE` < `MINIMUM` < `MULTIPLY` <
+`MAXIMUM` (the OMI physics material's modes), and a pair entry replaces any
+value it sets. The static friction applies while the bodies slide past each
+other slower than `WorldSettings.static_friction_speed` (0.05 m/s) at the
+contact, the dynamic friction above it; the contact listener sets Jolt's
+combined friction and restitution for each contact as it is added and each
+step it persists. A mesh triangle may carry its own material
+(`Shape.mesh(points, triangles, materials=)`), which contacts and a character
+standing on it report.
+
+## Collision filters
+
+```python
+world.set_filter_table([[True, False], [False, True]])   # (F, F)
+world.add_bodies(pj.BodyBatch.spheres(positions, filter=1))
+```
+
+A body's `filter` is an index into the world's (F, F) collides-with table,
+made symmetric; a filter index outside the table meets every filter, so a
+world with no table collides every pair the groups and masks allow. Each
+distinct (group, mask, filter) gets its own Jolt object layer, and Jolt's
+object layer pair filter reads the table, so the broad phase drops a refused pair.
+`set_filter_table` takes effect at the next tick and wakes every dynamic body;
+`set_body_filters` moves bodies to other filters.
+
+## The contact filter
+
+```python
+def verdict(a, b, point, normal, approach):
+    return approach < 5.0          # False: pass through until they part
+
+world.set_contact_filter(verdict)
+world.add_bodies(pj.BodyBatch.spheres(positions, flags=pj.BodyFlag.FILTER_CONTACTS))
+```
+
+The filter is asked about a pair of solid bodies that both carry
+`BodyFlag.FILTER_CONTACTS` when Jolt first finds them touching
+(`ContactListener::OnContactValidate`), on the job thread that found them,
+inside the step: `a < b` uids, the contact point, the unit normal from `a` to
+`b` and the closing speed (m/s). False lets the two pass through each other;
+True or None solves them. The answer holds until the pair parts: a solved
+pair's when its contacts end, a refused pair's at the first step that does not
+meet them again. Collision filters and groups are applied first, so only pairs
+they allow are asked.
+
+Each job thread keeps one Python thread state for the world's run, made the
+first time it asks. The world thread holds the world lock exclusively during
+the step and does not hold the GIL, and every call that can wait for the world
+lock releases the GIL first, so a job thread waiting for the GIL waits for no
+thread that waits for it. The filter may submit commands; a query from it
+raises `RuntimeError`, since the step holds the lock. An exception stops the
+world, as from any callback.
+
+## Gravity zones and drag
+
+```python
+world.set_gravity_zones([
+    pj.GravityZone.box((0, 5, 0), (10, 10, 10), gravity=2.0, direction=(0, 1, 0), replace=True),
+    pj.GravityZone.sphere((50, 0, 0), 30.0, field=pj.ZoneField.POINT, center=(50, 0, 0),
+                          gravity=9.81, priority=1),
+])
+```
+
+A zone (OMI_physics_gravity) is a region, `GravityZone.box(position, size)`,
+`sphere(position, radius)` or `of_shape(shape_id, position, rotation)` (a
+registered shape's inside), turned by `rotation`, and a field:
+`DIRECTIONAL` along `direction` or `POINT` towards `center`, of `gravity`
+m/s2. A body whose centre of mass is inside zones takes the world's gravity,
+then each zone's in ascending `priority`: `replace` sets it to the zone's,
+`stop` sets it to zero, any other adds the zone's. The body's gravity factor
+scales the result. A Jolt step listener adds the difference from the world's
+gravity as a force before every collision step, to awake dynamic bodies.
+`set_gravity_zones` replaces the world's zones and wakes every dynamic body.
+
+Quadratic drag (`BodyBatch.quadratic_drag`, `set_drag`) is a force of
+`-k m |v| v` in the same listener: a falling body reaches `sqrt(g / k)`.
+
+## Kinematic tracks
+
+```python
+world.set_track([lift], pj.Track([0.0, 4.0, 8.0], [(0, 0, 0), (0, 6, 0), (0, 0, 0)], loop=True))
+world.drive(platform, lambda t: ((math.cos(t), 1.0, math.sin(t)), (0, 0, 0, 1)))
+```
+
+A `Track` is `times` (seconds from the tick that applies it, ascending),
+`positions` (k, 3) and `rotations` (k, 4, or None for the identity), and
+`loop`. Each tick the world moves the kinematic body to the track's pose at
+the end of the tick with Jolt's `MoveKinematic`, so what rides on it is
+carried. Positions are interpolated linearly and rotations by slerp; past the
+last sample a track holds its last pose or starts again. `clear_tracks` takes
+bodies off. `drive(uid, pose)` calls `pose(time)` on the world thread before
+each step, `time` the simulation time at the end of the tick, and moves the
+body there; it returns a position or `(position, quaternion)`.
+`move_kinematic(uids, positions, orientations)` from a world callback moves
+bodies in the current tick, and from any other thread in the next.
 
 ## Streaming ground
 
@@ -626,7 +814,10 @@ cross-platform-deterministic build every wheel has. The tick a free-running
 command lands on is recorded by `drain_applied()`; a lockstep world given the
 same batches with `at_tick` set to the recorded ticks repeats the run bit for
 bit. Uids are assigned in submission order, so a replay that submits the same
-batches in the same order gets the same uids.
+batches in the same order gets the same uids, and joint ids likewise.
+Joints, materials, filters, the contact filter (when its answers depend only
+on its arguments), gravity zones, drag and tracks keep the replay bitwise on 1
+and 8 job threads (tests/test_p3_lockstep.py).
 
 ## Fork
 
@@ -638,8 +829,10 @@ first world.
 
 ## `pyjoltphysics.testing`
 
-Scene helpers shared by the suites and the benchmarks: `floor(half)`, a
-static box floor with its top at y = 0; `grid(count, spacing, y0)`, grid
+Scene helpers shared by the suites and the benchmarks: `floor(half,
+**values)`, a static box floor with its top at y = 0, `values` further
+`BodyBatch` fields; `latest(world)`, the newest snapshot, an `AssertionError`
+before the first tick; `grid(count, spacing, y0)`, grid
 positions; `pose_digest(snapshot, digest)`, a hashlib object updated with a
 snapshot's uids and poses in uid order; `character_digest(snapshot, digest)`,
 the same with every character's id, position, velocity, state, ground and

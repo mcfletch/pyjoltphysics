@@ -24,6 +24,15 @@
 - A static mesh or height field has enhanced internal edge removal by default; `BodyFlag.NO_SMOOTH_EDGES` turns it off.
 - `stats()`: `characters`, `characters_ms`, `queries`, `query_wait_ms`, `query_wait_max_ms`.
 - `pyjoltphysics.testing.character_digest`.
+- Joints: `Joint` builders `fixed`, `ball`, `hinge`, `slider`, `distance`, `six_dof`, `universal`, `two_axis_hinge`, `motor`; `Motor`, `MotorMode`, `JointKind`, `JointState`; `World.add_joint`, `add_joints`, `remove_joints`, `set_joint_motors`, `set_joints_enabled`; `Snapshot.joints` (`JointRows`); break limits with `EventKind.JOINT` and `EventPhase.BREAK`; jointed bodies do not collide unless `collide`.
+- Materials: `World.materials` (`MaterialTable`, `Material`, `Combine`), pair entries, static and dynamic friction by `WorldSettings.static_friction_speed`; `BodyBatch.material`, `World.set_body_materials`; `Shape.mesh(materials=)` per triangle.
+- The event record's last word is `material_a` and `material_b`.
+- Collision filters: `BodyBatch.filter`, `World.set_filter_table`, `set_body_filters`.
+- The contact filter: `World.set_contact_filter`, asked for pairs with `BodyFlag.FILTER_CONTACTS`.
+- Gravity zones (`GravityZone`, `ZoneShape`, `ZoneField`, `World.set_gravity_zones`), characters included; quadratic drag (`BodyBatch.quadratic_drag`, `World.set_drag`).
+- Kinematic tracks (`Track`, `World.set_track`, `clear_tracks`), `World.drive` and `World.move_kinematic`.
+- `CharacterRows.previous`, `eye`, `ground_material`, `stuck`; character touches of other characters; a struck body's momentum as the begin record's `impulse`.
+- `pyjoltphysics.testing.latest`; `floor()` takes batch fields.
 
 - `jolt_version()`, `build_options()` and `selftest()` over the compiled module `pyjoltphysics._native`.
 - Jolt Physics v5.6.0 (commit e77f1755), double precision, cross-platform deterministic, SSE4.2 floor on x86-64.

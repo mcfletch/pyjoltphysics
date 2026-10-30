@@ -44,6 +44,16 @@ stairs, slopes, slides, knock-downs, landings, pushing, platforms, pass
 groups), moved on the world thread every tick and read from the snapshot; 300
 of them on a height field take 0.60 ms a 60 Hz frame on 8 job threads.
 `swap_bodies` replaces tiles of a streamed landscape in one tick.
+
+Joints (fixed, ball, hinge, slider, distance, six-axis with universal and
+two-axis hinge builders, and X3D's motor joint) take limits, springs,
+friction and motors, break past a force or torque, and report their angle,
+position, force and torque in the snapshot. Materials combine by the OMI
+modes, with an (M, M) pair table and static friction below a slip speed.
+Collision filters are an (F, F) table changeable at run time. A Python
+contact filter is asked on Jolt's job threads about pairs that opted in.
+Gravity zones (box, sphere or shape regions; directional or point fields),
+quadratic drag and kinematic tracks run natively each tick.
 `docs/API.md` describes every call.
 
 The build information:
