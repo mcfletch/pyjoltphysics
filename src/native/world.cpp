@@ -48,6 +48,7 @@ WorldCore::WorldCore(const WorldSettings &settings)
     physics.mPointVelocitySleepThreshold = settings.sleep_velocity;
     physics.mMinVelocityForRestitution = settings.min_velocity_for_restitution;
     physics.mDeterministicSimulation = true;
+    physics.mPenetrationSlop = settings.penetration_slop;
     system_.SetPhysicsSettings(physics);
     collector_.min_velocity_for_restitution = settings.min_velocity_for_restitution;
     materials_.static_speed = settings.static_friction_speed;

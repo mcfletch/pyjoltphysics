@@ -61,6 +61,7 @@ struct WorldSettings {
     int collision_steps = 1;
     uint32_t temp_allocator_mb = 16;
     float static_friction_speed = 0.05f;  // m/s of sliding below which a material's static friction holds
+    float penetration_slop = 0.02f;       // m bodies may sink into each other before the solver separates them
 };
 
 // A callback raised; the world has stopped and keeps the exception.

@@ -1082,7 +1082,8 @@ void bind_world(nb::module_ &m) {
                int threads, uint32_t max_bodies, uint32_t max_body_pairs,
                uint32_t max_contact_constraints, size_t event_capacity, bool allow_sleeping,
                float time_before_sleep, float sleep_velocity, float min_velocity_for_restitution,
-               int collision_steps, uint32_t temp_allocator_mb, float static_friction_speed) {
+               int collision_steps, uint32_t temp_allocator_mb, float static_friction_speed,
+               float penetration_slop) {
                 if (!(std::isfinite(tick_hz) && tick_hz > 0.0))
                     throw std::invalid_argument("tick_hz is positive");
                 if (!(std::isfinite(max_catch_up) && max_catch_up >= 0.0))
@@ -1111,6 +1112,9 @@ void bind_world(nb::module_ &m) {
                 if (!(std::isfinite(static_friction_speed) && static_friction_speed >= 0.0f))
                     throw std::invalid_argument("static_friction_speed is finite and not negative");
                 settings.static_friction_speed = static_friction_speed;
+                if (!(std::isfinite(penetration_slop) && penetration_slop >= 0.0f))
+                    throw std::invalid_argument("penetration_slop is finite and not negative");
+                settings.penetration_slop = penetration_slop;
                 new (self) World(settings);
             },
             nb::kw_only(), nb::arg("tick_hz") = 120.0, nb::arg("max_catch_up") = 0.1,
@@ -1120,7 +1124,8 @@ void bind_world(nb::module_ &m) {
             nb::arg("allow_sleeping") = true, nb::arg("time_before_sleep") = 0.5f,
             nb::arg("sleep_velocity").sig("0.03") = 0.03f, nb::arg("min_velocity_for_restitution") = 1.0f,
             nb::arg("collision_steps") = 1, nb::arg("temp_allocator_mb") = 16,
-            nb::arg("static_friction_speed").sig("0.05") = 0.05f)
+            nb::arg("static_friction_speed").sig("0.05") = 0.05f,
+            nb::arg("penetration_slop").sig("0.02") = 0.02f)
         .def("add_bodies", &add_bodies, nb::arg("position"), nb::arg("orientation"),
              nb::arg("shape_kind"), nb::arg("shape_params"), nb::arg("shape_id"),
              nb::arg("scale"), nb::arg("shape_offset"), nb::arg("shape_rotation"),

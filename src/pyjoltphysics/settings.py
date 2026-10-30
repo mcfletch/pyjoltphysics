@@ -46,6 +46,10 @@ class WorldSettings:
     #: m/s of sliding at a contact below which a material's static friction
     #: holds; above it the dynamic friction acts.
     static_friction_speed: float = 0.05
+    #: Metres two bodies may sink into each other before the solver pushes
+    #: them apart (Jolt's ``mPenetrationSlop``): a resting body sits up to this
+    #: far into what it rests on.
+    penetration_slop: float = 0.02
     #: Body damping where a :class:`~pyjoltphysics.BodyBatch` names none, 1/s.
     linear_damping: float = 0.0
     angular_damping: float = 0.0

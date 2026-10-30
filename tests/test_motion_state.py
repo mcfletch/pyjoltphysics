@@ -181,3 +181,20 @@ def test_restore_refuses_a_state_of_another_layout(make_world: MakeWorld) -> Non
     world.restore_state(saved)
     world.run_ticks(1)
     assert world.stats()['rejected'] >= 1
+
+
+@pytest.mark.parametrize('slop', [0.02, 0.005])
+def test_penetration_slop_bounds_how_far_a_resting_box_sinks(make_world: MakeWorld,
+                                                             slop: float) -> None:
+    world = make_world(tick_hz=120.0, threads=1, penetration_slop=slop)
+    world.add_bodies(floor(10.0))
+    (box,), _ = world.add_bodies(BodyBatch.boxes([(0.0, 5.0, 0.0)], size=(1.0, 1.0, 1.0),
+                                                 mass=2.0))
+    world.run_ticks(480)
+    position, _ = _state(world, box)
+    assert 0.5 - slop - 1e-3 <= position[1] <= 0.5 + 1e-4
+
+
+def test_penetration_slop_refuses_negative(make_world: MakeWorld) -> None:
+    with pytest.raises(ValueError, match='penetration_slop'):
+        make_world(penetration_slop=-1.0)

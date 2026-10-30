@@ -81,6 +81,7 @@ A frozen dataclass; every field has a default.
 | `temp_allocator_mb` | 16 | step scratch memory allocated up front; more comes from the heap |
 | `linear_damping`, `angular_damping` | 0.0 | 1/s, for bodies whose batch names none |
 | `static_friction_speed` | 0.05 | m/s of sliding at a contact below which a material's static friction holds |
+| `penetration_slop` | 0.02 | m two bodies may sink into each other before the solver separates them (Jolt's `mPenetrationSlop`); a resting body sits up to this far into what it rests on |
 
 `settings.dt` is `1 / tick_hz`.
 
