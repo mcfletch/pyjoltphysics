@@ -46,19 +46,25 @@ class QueryFilter:
     triggers: bool = False
     characters: bool = True
 
-    def __post_init__(self) -> None:
-        object.__setattr__(self, 'exclude', _sorted_uids(self.exclude))
+    _native: tuple[int, int, npt.NDArray[np.uint32], bool, bool] = dataclasses.field(
+        init=False, repr=False, compare=False
+    )
 
-    def native(self) -> tuple[int, int, npt.NDArray[np.uint32], bool, bool]:
-        """Return the native call's ``group, mask, exclude, triggers, characters`` arguments."""
-        exclude = np.asarray(self.exclude, dtype=np.uint32).reshape(-1)
-        return (
+    def __post_init__(self) -> None:
+        exclude = _sorted_uids(self.exclude)
+        object.__setattr__(self, 'exclude', exclude)
+        native = (
             int(self.group),
             int(self.mask),
-            exclude,
+            np.asarray(exclude, dtype=np.uint32).reshape(-1),
             bool(self.triggers),
             bool(self.characters),
         )
+        object.__setattr__(self, '_native', native)
+
+    def native(self) -> tuple[int, int, npt.NDArray[np.uint32], bool, bool]:
+        """Return the native call's ``group, mask, exclude, triggers, characters`` arguments."""
+        return self._native
 
 
 #: The filter a query with none uses.

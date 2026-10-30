@@ -118,6 +118,11 @@ class World:
         Queue removing bodies and adding others in one tick; return the new uids and the sequence number.
         """
 
+    def raycast(self, origin: Sequence[float], direction: Sequence[float], max_distance: float, group: int, mask: int, exclude: Annotated[NDArray[numpy.uint32], dict(shape=(None,), order='C', device='cpu', writable=False)], triggers: bool, characters: bool) -> tuple[int, float, list[float], list[float], int] | None:
+        """
+        Cast one ray; return (uid, fraction, point, normal, sub_shape) of the first hit, or None.
+        """
+
     def raycast_batch(self, origins: Annotated[NDArray[numpy.float64], dict(shape=(None, 3), order='C', device='cpu', writable=False)], directions: Annotated[NDArray[numpy.float64], dict(shape=(None, 3), order='C', device='cpu', writable=False)], max_distance: float, group: int, mask: int, exclude: Annotated[NDArray[numpy.uint32], dict(shape=(None,), order='C', device='cpu', writable=False)], triggers: bool, characters: bool) -> tuple[Annotated[NDArray[numpy.uint8], dict(shape=(None,))], Annotated[NDArray[numpy.uint32], dict(shape=(None,))], Annotated[NDArray[numpy.float32], dict(shape=(None,))], Annotated[NDArray[numpy.float64], dict(shape=(None, 3))], Annotated[NDArray[numpy.float32], dict(shape=(None, 3))], Annotated[NDArray[numpy.uint32], dict(shape=(None,))]]:
         """
         Cast rays; return (hit, uid, fraction, point, normal, sub_shape) arrays.

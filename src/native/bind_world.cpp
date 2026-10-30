@@ -518,6 +518,29 @@ RayArrays raycast_batch(World &world, const Vec3s &origins, const Vec3s &directi
                           owned<uint32_t, nb::shape<-1>>(std::move(out.sub_shape), {n}));
 }
 
+using OneRay = std::optional<std::tuple<Uid, float, std::array<double, 3>, std::array<float, 3>, uint32_t>>;
+
+// One ray, answered without arrays: (uid, fraction, point, normal, sub_shape) or None.
+OneRay raycast_one(World &world, std::array<double, 3> origin, std::array<double, 3> direction, double max_distance,
+                   uint32_t group, uint32_t mask, const Uids &exclude, bool triggers, bool characters) {
+    check_vector(origin, "origin");
+    check_vector(direction, "direction");
+    if (direction[0] == 0.0 && direction[1] == 0.0 && direction[2] == 0.0)
+        throw std::invalid_argument("a ray direction is not zero");
+    if (!(std::isfinite(max_distance) && max_distance > 0.0))
+        throw std::invalid_argument("max_distance is finite and positive");
+    const QueryFilter filter = make_filter(group, mask, exclude, triggers, characters);
+    RayResults out;
+    {
+        nb::gil_scoped_release release;
+        world.core().raycast(origin.data(), direction.data(), 1, max_distance, filter, out);
+    }
+    if (!out.hit[0])
+        return std::nullopt;
+    return std::make_tuple(out.uid[0], out.fraction[0], std::array<double, 3>{out.point[0], out.point[1], out.point[2]},
+                           std::array<float, 3>{out.normal[0], out.normal[1], out.normal[2]}, out.sub_shape[0]);
+}
+
 CastArrays cast_shape(World &world, uint8_t kind, std::array<double, 4> params, ShapeId id,
                      std::array<double, 3> start, std::array<double, 4> rotation, std::array<double, 3> end,
                      bool all_hits, uint32_t group, uint32_t mask, const Uids &exclude, bool triggers,
@@ -839,6 +862,9 @@ void bind_world(nb::module_ &m) {
              nb::arg("linear_velocity"), nb::arg("angular_velocity"), nb::arg("group"),
              nb::arg("mask"), nb::arg("flags"), nb::arg("at_tick") = 0,
              "Queue removing bodies and adding others in one tick; return the new uids and the sequence number.")
+        .def("raycast", &raycast_one, nb::arg("origin"), nb::arg("direction"), nb::arg("max_distance"),
+             nb::arg("group"), nb::arg("mask"), nb::arg("exclude"), nb::arg("triggers"), nb::arg("characters"),
+             "Cast one ray; return (uid, fraction, point, normal, sub_shape) of the first hit, or None.")
         .def("raycast_batch", &raycast_batch, nb::arg("origins"), nb::arg("directions"), nb::arg("max_distance"),
              nb::arg("group"), nb::arg("mask"), nb::arg("exclude"), nb::arg("triggers"), nb::arg("characters"),
              "Cast rays; return (hit, uid, fraction, point, normal, sub_shape) arrays.")

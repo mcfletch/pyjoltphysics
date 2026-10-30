@@ -555,23 +555,24 @@ class World:
 
         ``direction`` need not be a unit vector. None when the ray meets nothing.
         """
-        d = np.asarray(direction, dtype=np.float64).reshape(3)
-        if not (np.all(np.isfinite(d)) and np.any(d != 0.0)):
-            raise ValueError(
-                'a ray direction is finite and not zero, not %r' % (tuple(d.tolist()),)
-            )
-        hits = self.raycast_batch([origin], d[None, :], max_distance, filter)
-        if not hits.hit[0]:
+        hit = self._native.raycast(
+            _triple(origin, 'origin'),
+            _triple(direction, 'direction'),
+            float(max_distance),
+            *(filter or DEFAULT_FILTER).native(),
+        )
+        if hit is None:
             return None
-        px, py, pz = hits.point[0].tolist()
-        nx, ny, nz = hits.normal[0].tolist()
+        uid, fraction, point, normal, sub_shape = hit
+        px, py, pz = point
+        nx, ny, nz = normal
         return RayHit(
-            uid=int(hits.uid[0]),
-            distance=float(hits.distance[0]),
-            fraction=float(hits.fraction[0]),
+            uid=uid,
+            distance=fraction * float(max_distance),
+            fraction=fraction,
             point=(px, py, pz),
             normal=(nx, ny, nz),
-            sub_shape=int(hits.sub_shape[0]),
+            sub_shape=sub_shape,
         )
 
     def raycast_batch(
