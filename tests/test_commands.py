@@ -204,11 +204,26 @@ def test_removed_bodies_leave_the_snapshot(make_world: MakeWorld) -> None:
     assert snapshot is not None
     assert sorted(snapshot.uid.tolist()) == sorted(uids[[1, 3, 4]].tolist())
     assert world.stats()['bodies'] == 3
+    assert world.stats()['queued_bodies'] == 0
     # The moved rows are in `changed`, so a reader keeping state by row sees them.
     for row in range(snapshot.count):
         if row in snapshot.changed:
             continue
         pytest.fail('row %d was not rewritten after the removal' % row)
+
+
+def test_stats_count_applied_bodies_apart_from_queued_ones(make_world: MakeWorld) -> None:
+    world = make_world(threads=1)
+    world.add_bodies(BodyBatch.spheres(grid(4, spacing=3.0)))
+    world.add_bodies(BodyBatch.spheres(grid(6, spacing=3.0, y0=20.0)), at_tick=5)
+    stats = world.stats()
+    assert (stats['bodies'], stats['queued_bodies']) == (0, 10)
+    world.run_ticks(1)
+    stats = world.stats()
+    assert (stats['bodies'], stats['queued_bodies']) == (4, 6)
+    world.run_ticks(5)
+    stats = world.stats()
+    assert (stats['bodies'], stats['queued_bodies']) == (10, 0)
 
 
 def test_every_primitive_shape_comes_to_rest_on_a_plane(make_world: MakeWorld) -> None:

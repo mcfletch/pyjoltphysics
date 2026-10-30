@@ -4,8 +4,9 @@ A :class:`World` owns a Jolt physics system and a thread that steps it at a
 fixed rate. Bodies are added, changed and removed by command batches of
 arrays (:class:`BodyBatch`); each tick publishes a :class:`Snapshot` read as
 NumPy views, and contact, trigger, sleep and wake events as records of
-:data:`EVENT_DTYPE`. Shapes are boxes, spheres, capsules, cylinders and
-static planes.
+:data:`EVENT_DTYPE`. Shapes are boxes, spheres, capsules, cylinders, static
+planes, convex hulls, triangle meshes, height fields and compounds
+(:class:`Shape`), built once and shared by id.
 
 >>> import pyjoltphysics
 >>> pyjoltphysics.jolt_version()
@@ -19,10 +20,11 @@ from __future__ import annotations
 import dataclasses
 
 from pyjoltphysics import _native
-from pyjoltphysics.bodies import BodyBatch
+from pyjoltphysics.bodies import BodyBatch, ShapeRef, heightfield_tiles
 from pyjoltphysics.enums import BodyFlag, EndReason, EventKind, EventPhase, MotionType, ShapeKind
 from pyjoltphysics.events import EVENT_DTYPE, event_times
 from pyjoltphysics.settings import WorldSettings
+from pyjoltphysics.shapes import Shape, ShapeInfo, heightfield_side
 from pyjoltphysics.world import (
     EventsCallback,
     Snapshot,
@@ -96,6 +98,12 @@ __all__ = [
     'BodyFlag',
     'MotionType',
     'ShapeKind',
+    # shapes
+    'Shape',
+    'ShapeInfo',
+    'ShapeRef',
+    'heightfield_side',
+    'heightfield_tiles',
     # events
     'EVENT_DTYPE',
     'EndReason',

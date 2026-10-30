@@ -16,6 +16,7 @@
 #include <nanobind/nanobind.h>
 
 #include <atomic>
+#include <cstdint>
 #include <map>
 #include <mutex>
 #include <vector>
@@ -57,6 +58,8 @@ struct CallbackSet {
     std::atomic<bool> has_after{false};
     std::atomic<bool> has_events{false};
     std::atomic<bool> has_at_tick{false};
+    // The lowest tick an at_tick callable waits for; UINT64_MAX for none.
+    std::atomic<uint64_t> earliest_at_tick{UINT64_MAX};
 
     void set(nb::object &slot, std::atomic<bool> &flag, nb::object fn);
     void add_at_tick(uint64_t tick, nb::object fn);

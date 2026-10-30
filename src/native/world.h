@@ -74,7 +74,10 @@ struct WorldStats {
     uint64_t events_dropped = 0;
     uint64_t rejected = 0;  // commands naming a body that cannot take them
     size_t pool = 0;
-    size_t bodies = 0;
+    size_t bodies = 0;          // in the world: applied adds less applied removals
+    size_t queued_bodies = 0;   // submitted in add batches not yet applied
+    size_t shapes = 0;          // registered shape ids
+    uint64_t broadphase_optimizations = 0;
     size_t pairs = 0;
     size_t events_held = 0;
     uint32_t awake = 0;
@@ -118,6 +121,8 @@ public:
     WorldStats stats() const;
     void reset_stats();
 
+    ShapeLibrary &shapes() { return shapes_; }
+
     // -- Python state: callers are attached ----------------------------------
     CallbackSet &callbacks() { return callbacks_; }
     // Wakes an idle world thread, as after a step callback is registered.
@@ -140,6 +145,7 @@ private:
     enum class Mode { Free, Lockstep };
     using Clock = std::chrono::steady_clock;
     static constexpr uint32_t kNoRow = 0xffffffffu;
+    static constexpr size_t kOptimizeAfterStatics = 256;
 
     struct Row {
         Uid uid;
@@ -167,6 +173,10 @@ private:
     void apply(Activate &activate, uint64_t index);
     void apply(SetMotionTypes &set, uint64_t index);
     void apply(SetMaterials &set, uint64_t index);
+    void wake_under_sensor(const JPH::BodyID &sensor);
+    // Rebuilds the broad phase's trees after a large add of static bodies, once
+    // the world thread has a moment with no tick due.
+    void optimize_if_due();
     const Row *find(Uid uid) const;
     void bind_row(Uid uid, const JPH::BodyID &id);
     void unbind_row(Uid uid);
@@ -189,6 +199,9 @@ private:
     std::vector<uint32_t> row_of_uid_;
     std::vector<uint32_t> row_of_index_;  // by BodyID index
     std::atomic<int64_t> reserved_bodies_{0};
+    std::atomic<size_t> applied_bodies_{0};
+    size_t statics_since_optimize_ = 0;
+    std::atomic<uint64_t> optimizations_{0};
 
     CommandQueue queue_;
     std::vector<Batch> due_;

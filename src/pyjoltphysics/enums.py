@@ -19,10 +19,11 @@ class MotionType(enum.IntEnum):
 
 
 class ShapeKind(enum.IntEnum):
-    """A primitive collision shape and the meaning of its four parameters.
+    """A collision shape's kind; for a primitive, the meaning of its four parameters.
 
     Sizes follow the OMI physics shape model, in metres. Capsules and
-    cylinders run along the body's Y axis.
+    cylinders run along the body's Y axis. The kinds from ``CONVEX`` on carry
+    arrays and are built by :meth:`~pyjoltphysics.World.add_shape`.
     """
 
     #: Edge lengths x, y, z.
@@ -36,6 +37,14 @@ class ShapeKind(enum.IntEnum):
     #: Half extent of the plane's bounds (0 for 1 km). The plane passes
     #: through the body's origin with the body's +Y as its normal; static only.
     PLANE = 5
+    #: The convex hull of a point cloud.
+    CONVEX = 6
+    #: Indexed triangles; static and kinematic bodies only.
+    MESH = 7
+    #: A grid of heights; static and kinematic bodies only.
+    HEIGHTFIELD = 8
+    #: Child shapes placed in the body's frame.
+    COMPOUND = 9
 
 
 class BodyFlag(enum.IntFlag):
@@ -54,6 +63,10 @@ class BodyFlag(enum.IntFlag):
     #: A static body that a later ``set_motion_types`` may make kinematic
     #: or dynamic; it needs a mass or density.
     MOVABLE = 1 << 4
+    #: Jolt's enhanced internal edge removal: contacts with the inner edges of
+    #: a mesh, height field or compound are merged with the faces beside them,
+    #: so a body sliding across them does not catch on an edge.
+    SMOOTH_EDGES = 1 << 5
 
 
 class EventKind(enum.IntEnum):

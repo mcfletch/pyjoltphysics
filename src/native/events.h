@@ -1,4 +1,4 @@
-// Events: contacts, trigger overlaps, sleep and wake, as fixed 48-byte records.
+// Events: contacts, trigger overlaps, sleep and wake, as fixed 64-byte records.
 //
 // Jolt's listeners run on its job threads during Update and report each pair
 // of sub-shapes. They append raw reports under a mutex; after Update the world
@@ -49,12 +49,16 @@ struct Event {
     uint32_t tick;     // the tick the event happened in (the snapshot's tick)
     Uid a;
     Uid b;
-    float point[3];    // world position of the contact, metres
+    double point[3];   // world position of the contact, metres
     float normal[3];   // unit vector from a to b
     float approach;    // closing speed along the normal at the contact, m/s
-    float impulse;     // estimated normal impulse of the collision, N s (begin only)
+    // Estimated normal impulse of the collision, N s, contact begin only.
+    // Jolt calls its listeners before the solver runs, so no record carries
+    // the impulse the solver applied.
+    float impulse;
+    uint32_t reserved;  // zero
 };
-static_assert(sizeof(Event) == 48, "the event record is 48 bytes");
+static_assert(sizeof(Event) == 64, "the event record is 64 bytes");
 
 // What one listener call reports, before aggregation.
 struct RawContact {
@@ -65,7 +69,7 @@ struct RawContact {
     uint8_t sensors;  // bit 0: body 1 is a sensor, bit 1: body 2
     bool report;
     Uid uid1, uid2;  // in Jolt's body order (body 1 has the lower BodyID)
-    float point[3];
+    double point[3];
     float normal[3];  // from body 1 to body 2
     float approach;
     float impulse;

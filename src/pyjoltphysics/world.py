@@ -19,8 +19,10 @@ including a callback on the world thread, and take effect at the next tick.
 from __future__ import annotations
 
 import atexit
+import math
 import os
 import threading
+import weakref
 from collections.abc import Callable
 from types import TracebackType
 from typing import Any
@@ -30,9 +32,10 @@ import numpy.typing as npt
 
 from pyjoltphysics import _native
 from pyjoltphysics.bodies import BodyBatch
-from pyjoltphysics.enums import MotionType
+from pyjoltphysics.enums import MotionType, ShapeKind
 from pyjoltphysics.events import as_events
 from pyjoltphysics.settings import WorldSettings
+from pyjoltphysics.shapes import Shape, ShapeInfo
 
 __all__ = ['Snapshot', 'StepCallback', 'EventsCallback', 'World', 'WorldError', 'WorldStopped']
 
@@ -221,6 +224,9 @@ class World:
         _install_process_hooks()
         self._settings = settings if settings is not None else WorldSettings()
         self._native = _native.World(**self._settings.native())
+        # Each Shape object is built once per world; the entry goes with the Shape.
+        self._shape_ids: weakref.WeakKeyDictionary[Shape, int] = weakref.WeakKeyDictionary()
+        self._shapes_lock = threading.Lock()
 
     def __enter__(self) -> World:
         return self
@@ -309,11 +315,104 @@ class World:
         """
         return self._native.drain_applied()
 
+    # -- shapes ------------------------------------------------------------
+
+    def add_shape(self, shape: Shape) -> int:
+        """Build ``shape`` on the calling thread and return its id in this world.
+
+        The same :class:`Shape` object returns the same id every time. Bodies
+        naming the id share the one Jolt shape. A shape Jolt cannot build
+        raises ``ValueError`` with the reason.
+        """
+        with self._shapes_lock:
+            known = self._shape_ids.get(shape)
+            if known is not None:
+                return known
+            made = self._build(shape)
+            self._shape_ids[shape] = made
+            return made
+
+    def remove_shape(self, shape_id: int) -> bool:
+        """Forget a shape id, True if it named a shape; bodies made with the shape keep it."""
+        with self._shapes_lock:
+            for shape, known in list(self._shape_ids.items()):
+                if known == shape_id:
+                    del self._shape_ids[shape]
+            return bool(self._native.remove_shape(shape_id))
+
+    def shape_info(self, shape_id: int) -> ShapeInfo:
+        """Return the kind, volume, centre of mass and bounds of a shape id."""
+        info = self._native.shape_info(shape_id)
+
+        def vector(name: str) -> tuple[float, float, float]:
+            x, y, z = np.asarray(info[name], dtype=np.float64).tolist()
+            return (x, y, z)
+
+        return ShapeInfo(
+            kind=ShapeKind(int(info['kind'])),  # type: ignore[call-overload]  # an int
+            volume=float(info['volume']),  # type: ignore[arg-type]  # a float
+            center_of_mass=vector('center_of_mass'),
+            bounds_min=vector('bounds_min'),
+            bounds_max=vector('bounds_max'),
+            dynamic=bool(info['dynamic']),
+        )
+
+    def _build(self, shape: Shape) -> int:
+        native = self._native
+        if shape.kind == ShapeKind.CONVEX:
+            assert shape.points is not None
+            return native.add_convex(
+                np.ascontiguousarray(shape.points), shape.max_convex_radius, shape.hull_tolerance
+            )
+        if shape.kind == ShapeKind.MESH:
+            assert shape.points is not None and shape.triangles is not None
+            return native.add_mesh(
+                np.ascontiguousarray(shape.points), np.ascontiguousarray(shape.triangles)
+            )
+        if shape.kind == ShapeKind.HEIGHTFIELD:
+            assert shape.heights is not None
+            low, high = (
+                shape.height_range if shape.height_range is not None else (math.nan, math.nan)
+            )
+            return native.add_heightfield(
+                np.ascontiguousarray(shape.heights),
+                shape.origin,
+                shape.spacing,
+                shape.block_size,
+                shape.bits_per_sample,
+                low,
+                high,
+            )
+        if shape.kind == ShapeKind.COMPOUND:
+            children = np.array(
+                [
+                    self._build_locked(child) if isinstance(child, Shape) else child
+                    for child, _, _ in shape.parts
+                ],
+                dtype=np.uint32,
+            ).reshape(-1)
+            positions = np.array([p for _, p, _ in shape.parts], np.float64).reshape(-1, 3)
+            orientations = np.array([q for _, _, q in shape.parts], np.float64).reshape(-1, 4)
+            return native.add_compound(children, positions, orientations, shape.mutable)
+        return native.add_primitive(int(shape.kind), shape.params)
+
+    def _build_locked(self, shape: Shape) -> int:
+        """add_shape for a compound's child, with the shapes lock already held."""
+        known = self._shape_ids.get(shape)
+        if known is None:
+            known = self._shape_ids[shape] = self._build(shape)
+        return known
+
     # -- commands ----------------------------------------------------------
 
     def add_bodies(self, batch: BodyBatch, at_tick: int = 0) -> tuple[npt.NDArray[np.uint32], int]:
-        """Queue the batch's bodies; return their uids, assigned now, and the sequence number."""
-        arrays = batch.arrays(self._settings.linear_damping, self._settings.angular_damping)
+        """Queue the batch's bodies; return their uids, assigned now, and the sequence number.
+
+        A :class:`Shape` the batch names is built by :meth:`add_shape` first.
+        """
+        arrays = batch.arrays(
+            self._settings.linear_damping, self._settings.angular_damping, self.add_shape
+        )
         return self._native.add_bodies(**arrays, at_tick=at_tick)
 
     def remove_bodies(self, uids: npt.ArrayLike, at_tick: int = 0) -> int:

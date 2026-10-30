@@ -7,6 +7,8 @@
 
 #include "common.h"
 
+#include <Jolt/Physics/Collision/Shape/Shape.h>
+
 #include <deque>
 #include <mutex>
 #include <variant>
@@ -18,8 +20,10 @@ struct AddBodies {
     std::vector<Uid> uids;
     std::vector<double> position;      // (n, 3) metres
     std::vector<double> orientation;   // (n, 4) unit quaternions x, y, z, w
-    std::vector<uint8_t> shape_kind;   // ShapeKind
-    std::vector<double> shape_params;  // (n, 4), see shapes.h
+    // Resolved when the batch is submitted: the library's shape, decorated
+    // with the body's scale, offset and centre of mass. Rows of one shape
+    // share one reference.
+    std::vector<JPH::RefConst<JPH::Shape>> shapes;
     std::vector<uint8_t> motion;       // Motion
     std::vector<double> mass;          // kg; 0 takes the mass from density
     std::vector<double> density;       // kg/m3, where mass is 0

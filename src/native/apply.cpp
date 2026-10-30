@@ -5,6 +5,9 @@
 
 #include <Jolt/Physics/Body/BodyCreationSettings.h>
 #include <Jolt/Physics/Body/BodyInterface.h>
+#include <Jolt/Physics/Body/BodyLock.h>
+#include <Jolt/Physics/Collision/BroadPhase/BroadPhaseQuery.h>
+#include <Jolt/Physics/Collision/CollisionCollectorImpl.h>
 
 namespace pj {
 
@@ -65,22 +68,35 @@ void WorldCore::apply(AddBodies &add, uint64_t) {
     const size_t count = add.uids.size();
     std::vector<JPH::BodyID> made;
     made.reserve(count);
+    std::vector<JPH::BodyID> sensors;
+    size_t statics = 0;
+    // Consecutive rows usually share their collision triple.
+    uint32_t last_group = 0, last_mask = 0;
+    bool last_moving = false, have_layer = false;
+    JPH::ObjectLayer layer = 0;
     for (size_t i = 0; i < count; ++i) {
         const auto motion = static_cast<Motion>(add.motion[i]);
         const uint32_t flags = add.flags[i];
-        const ShapeParams params{add.shape_params[4 * i], add.shape_params[4 * i + 1],
-                                 add.shape_params[4 * i + 2], add.shape_params[4 * i + 3]};
-        JPH::RefConst<JPH::Shape> shape =
-            shapes_.get(static_cast<ShapeKind>(add.shape_kind[i]), params);
+        const JPH::Shape *shape = add.shapes[i].GetPtr();
         const bool moving = motion != Motion::Static;
+        if (!have_layer || add.group[i] != last_group || add.mask[i] != last_mask ||
+            moving != last_moving) {
+            layer = layers_.layer(add.group[i], add.mask[i], moving);
+            last_group = add.group[i];
+            last_mask = add.mask[i];
+            last_moving = moving;
+            have_layer = true;
+        }
         JPH::BodyCreationSettings settings(shape, rvec3(add.position, i), quat(add.orientation, i),
-                                           to_jolt(motion),
-                                           layers_.layer(add.group[i], add.mask[i], moving));
+                                           to_jolt(motion), layer);
         settings.mUserData = user_data(add.uids[i], flags);
         settings.mIsSensor = (flags & flag::kSensor) != 0;
+        // A kinematic sensor meets static and kinematic bodies too.
+        settings.mCollideKinematicVsNonDynamic = settings.mIsSensor;
         settings.mAllowSleeping = (flags & flag::kNoSleep) == 0;
         settings.mMotionQuality = (flags & flag::kContinuous) ? JPH::EMotionQuality::LinearCast
                                                               : JPH::EMotionQuality::Discrete;
+        settings.mEnhancedInternalEdgeRemoval = (flags & flag::kSmoothEdges) != 0;
         settings.mAllowDynamicOrKinematic = moving || (flags & flag::kMovable) != 0;
         settings.mFriction = add.friction[i];
         settings.mRestitution = add.restitution[i];
@@ -90,10 +106,21 @@ void WorldCore::apply(AddBodies &add, uint64_t) {
         settings.mLinearVelocity = vec3(add.linear_velocity, i);
         settings.mAngularVelocity = vec3(add.angular_velocity, i);
         if (settings.mAllowDynamicOrKinematic) {
-            const double mass =
-                add.mass[i] > 0.0 ? add.mass[i] : add.density[i] * double(shape->GetVolume());
-            settings.mOverrideMassProperties = JPH::EOverrideMassProperties::CalculateInertia;
-            settings.mMassPropertiesOverride.mMass = float(mass);
+            if (can_be_dynamic(*shape)) {
+                const double mass =
+                    add.mass[i] > 0.0 ? add.mass[i] : add.density[i] * double(shape->GetVolume());
+                settings.mOverrideMassProperties = JPH::EOverrideMassProperties::CalculateInertia;
+                settings.mMassPropertiesOverride.mMass = float(mass);
+            } else {
+                // Only kinematic: Jolt has no mass for a mesh or height field
+                // and a kinematic body's mass meets no solver, so a unit box
+                // of the given mass (1 kg by default) stands in.
+                const float mass = add.mass[i] > 0.0 ? float(add.mass[i]) : 1.0f;
+                settings.mOverrideMassProperties =
+                    JPH::EOverrideMassProperties::MassAndInertiaProvided;
+                settings.mMassPropertiesOverride.SetMassAndInertiaOfSolidBox(JPH::Vec3::sOne(),
+                                                                             mass);
+            }
         }
         JPH::Body *body = bodies.CreateBody(settings);
         if (body == nullptr) {
@@ -102,6 +129,10 @@ void WorldCore::apply(AddBodies &add, uint64_t) {
         }
         made.push_back(body->GetID());
         bind_row(add.uids[i], body->GetID());
+        if (settings.mIsSensor)
+            sensors.push_back(body->GetID());
+        if (!moving)
+            ++statics;
     }
     if (made.empty())
         return;
@@ -109,6 +140,31 @@ void WorldCore::apply(AddBodies &add, uint64_t) {
     JPH::BodyInterface::AddState state = bodies.AddBodiesPrepare(made.data(), int(made.size()));
     bodies.AddBodiesFinalize(made.data(), int(made.size()), state, JPH::EActivation::Activate);
     collector_.quiet = false;
+    applied_bodies_ += made.size();
+    statics_since_optimize_ += statics;
+    for (const JPH::BodyID &id : sensors)
+        wake_under_sensor(id);
+}
+
+// Jolt tests pairs only where a body is awake, so a sensor added or moved over
+// sleeping bodies would not see them. Waking the moving bodies whose bounds
+// meet the sensor's lets the next step report them; those at rest fall asleep
+// again and are held as inside.
+void WorldCore::wake_under_sensor(const JPH::BodyID &sensor) {
+    const JPH::BodyLockInterfaceNoLock &locks = system_.GetBodyLockInterfaceNoLock();
+    const JPH::Body *body = locks.TryGetBody(sensor);
+    if (body == nullptr)
+        return;
+    JPH::AllHitCollisionCollector<JPH::CollideShapeBodyCollector> hits;
+    system_.GetBroadPhaseQuery().CollideAABox(body->GetWorldSpaceBounds(), hits,
+                                              JPH::SpecifiedBroadPhaseLayerFilter(broadphase::kMoving));
+    std::vector<JPH::BodyID> asleep;
+    JPH::BodyInterface &bodies = system_.GetBodyInterfaceNoLock();
+    for (const JPH::BodyID &id : hits.mHits)
+        if (id != sensor && !bodies.IsActive(id))
+            asleep.push_back(id);
+    if (!asleep.empty())
+        bodies.ActivateBodies(asleep.data(), int(asleep.size()));
 }
 
 void WorldCore::apply(RemoveBodies &remove, uint64_t index) {
@@ -131,6 +187,7 @@ void WorldCore::apply(RemoveBodies &remove, uint64_t index) {
     collector_.quiet = false;
     bodies.DestroyBodies(ids.data(), int(ids.size()));
     reserved_bodies_ -= int64_t(ids.size());
+    applied_bodies_ -= ids.size();
 }
 
 void WorldCore::apply(SetTransforms &set, uint64_t) {
@@ -144,6 +201,8 @@ void WorldCore::apply(SetTransforms &set, uint64_t) {
                                       fixed ? JPH::EActivation::DontActivate
                                             : JPH::EActivation::Activate);
         publisher_.mark(row_of_uid_[set.uids[i]]);
+        if (flags_of(bodies.GetUserData(row->id)) & flag::kSensor)
+            wake_under_sensor(row->id);
     }
 }
 

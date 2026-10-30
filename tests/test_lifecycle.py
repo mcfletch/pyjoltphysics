@@ -59,6 +59,27 @@ def test_an_idle_world_runs_no_ticks_and_uses_no_cpu(make_world: MakeWorld) -> N
     assert world.wait_tick(ticks + 1, timeout=5.0)
 
 
+def test_a_future_at_tick_leaves_a_free_running_world_idle(make_world: MakeWorld) -> None:
+    world = make_world(threads=1)
+    world.run_ticks(1)
+    calls: list[int] = []
+    world.at_tick(50, lambda tick, time: calls.append(tick))
+    world.start()
+    time.sleep(0.3)
+    assert world.stats()['idle']
+    assert world.tick == 1
+    # Lockstep brings the world to the tick, and the callable runs there.
+    world.run_ticks(60)
+    assert calls == [50]
+    # One due now runs at once in a free-running world.
+    world.at_tick(world.tick, lambda tick, time: calls.append(tick))
+    world.start()
+    deadline = time.monotonic() + 5.0
+    while len(calls) < 2 and time.monotonic() < deadline:
+        time.sleep(0.01)
+    assert calls == [50, 61]
+
+
 def test_start_and_stop_are_idempotent(make_world: MakeWorld) -> None:
     world = make_world(threads=1)
     world.stop()

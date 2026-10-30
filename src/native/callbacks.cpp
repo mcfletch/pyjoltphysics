@@ -62,6 +62,7 @@ void CallbackSet::add_at_tick(uint64_t tick, nb::object fn) {
     std::lock_guard<std::mutex> guard(lock);
     at_tick.emplace(tick, std::move(fn));
     has_at_tick = true;
+    earliest_at_tick = at_tick.begin()->first;
 }
 
 std::vector<nb::object> CallbackSet::take_due(uint64_t tick) {
@@ -72,6 +73,7 @@ std::vector<nb::object> CallbackSet::take_due(uint64_t tick) {
         due.push_back(std::move(it->second));
     at_tick.erase(at_tick.begin(), end);
     has_at_tick = !at_tick.empty();
+    earliest_at_tick = at_tick.empty() ? UINT64_MAX : at_tick.begin()->first;
     return due;
 }
 
@@ -95,6 +97,7 @@ void CallbackSet::clear() {
         events = std::move(on_events);
         pending.swap(at_tick);
         has_before = has_after = has_events = has_at_tick = false;
+        earliest_at_tick = UINT64_MAX;
     }
 }
 

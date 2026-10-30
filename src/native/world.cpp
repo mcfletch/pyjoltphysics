@@ -76,7 +76,7 @@ uint64_t WorldCore::submit(Command &&command, uint64_t at_tick, Uid *first_uid) 
     check();
     uint32_t uid_count = 0;
     if (auto *add = std::get_if<AddBodies>(&command)) {
-        uid_count = uint32_t(add->shape_kind.size());
+        uid_count = uint32_t(add->shapes.size());
         const int64_t after = reserved_bodies_.fetch_add(uid_count) + uid_count;
         if (after > int64_t(settings_.max_bodies)) {
             reserved_bodies_.fetch_sub(uid_count);
@@ -234,9 +234,22 @@ bool WorldCore::lockstep() const {
     return mode_ == Mode::Lockstep;
 }
 
+// A future at_tick does not keep a free-running world ticking: an idle world's
+// tick count stands still, so the callable runs when other work or run_ticks
+// brings the world to its tick.
 bool WorldCore::busy() const {
-    return !queue_.empty() || callbacks_.any_step() || callbacks_.has_at_tick.load() ||
+    return !queue_.empty() || callbacks_.any_step() ||
+           callbacks_.earliest_at_tick.load() <= tick_.load() ||
            system_.GetNumActiveBodies(JPH::EBodyType::RigidBody) > 0;
+}
+
+void WorldCore::optimize_if_due() {
+    if (statics_since_optimize_ < kOptimizeAfterStatics)
+        return;
+    statics_since_optimize_ = 0;
+    std::unique_lock<std::shared_mutex> exclusive(world_lock_);
+    system_.OptimizeBroadPhase();
+    ++optimizations_;
 }
 
 void WorldCore::loop() {
@@ -254,6 +267,13 @@ void WorldCore::loop() {
             while (!go) {
                 if (stopping_)
                     break;
+                if (statics_since_optimize_ >= kOptimizeAfterStatics &&
+                    (mode_ == Mode::Lockstep ? wanted_ == 0 : Clock::now() < next || !busy())) {
+                    guard.unlock();
+                    optimize_if_due();
+                    guard.lock();
+                    continue;
+                }
                 if (mode_ == Mode::Lockstep) {
                     if (wanted_ > 0) {
                         go = true;
@@ -578,7 +598,10 @@ WorldStats WorldCore::stats() const {
     out.events_dropped = ring_.dropped();
     out.rejected = rejected_.load();
     out.pool = pool_size_.load();
-    out.bodies = size_t(std::max<int64_t>(0, reserved_bodies_.load()));
+    out.bodies = applied_bodies_.load();
+    out.queued_bodies = size_t(std::max<int64_t>(0, reserved_bodies_.load())) - out.bodies;
+    out.shapes = shapes_.registered();
+    out.broadphase_optimizations = optimizations_.load();
     {
         std::lock_guard<std::mutex> guard(control_);
         out.idle = idle_;

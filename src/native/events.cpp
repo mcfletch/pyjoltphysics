@@ -40,9 +40,9 @@ void Collector::record(const JPH::Body &body1, const JPH::Body &body2,
         sum += manifold.mRelativeContactPointsOn1[i];
     const JPH::RVec3 point =
         manifold.mBaseOffset + (count ? sum / float(count) : JPH::Vec3::sZero());
-    raw.point[0] = float(point.GetX());
-    raw.point[1] = float(point.GetY());
-    raw.point[2] = float(point.GetZ());
+    raw.point[0] = point.GetX();
+    raw.point[1] = point.GetY();
+    raw.point[2] = point.GetZ();
     store(raw.normal, manifold.mWorldSpaceNormal);
     const JPH::Vec3 closing = body1.GetPointVelocity(point) - body2.GetPointVelocity(point);
     raw.approach = closing.Dot(manifold.mWorldSpaceNormal);

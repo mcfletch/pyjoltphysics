@@ -2,7 +2,7 @@
 
 ``World.drain_events()`` returns every record since the last drain as one
 array of :data:`EVENT_DTYPE`; an ``on_events`` callback receives the records
-of one tick the same way. Each record is 48 bytes:
+of one tick the same way. Each record is 64 bytes:
 
 ========== ========= ===============================================================
 field      type      meaning
@@ -15,13 +15,18 @@ tick       uint32    the tick the event happened in, which is the tick of the fi
 a          uint32    body uid: the lower uid of a contact, the sensor of a trigger,
                      the body of a sleep or wake
 b          uint32    the other body's uid; 0 for sleep and wake
-point      3 float32 world position of the contact, metres (begin and persist)
+point      3 float64 world position of the contact, metres (begin and persist)
 normal     3 float32 unit vector from ``a`` to ``b`` (contacts, begin and persist)
 approach   float32   closing speed of the two bodies along the normal at the point,
                      m/s, positive when they approach (begin and persist)
-impulse    float32   estimated normal impulse of the collision, N s (contact begin
-                     only; Jolt's solver has not run when contacts are reported)
+impulse    float32   estimated normal impulse of the collision, N s, in contact begin
+                     records; 0 in every other record
+reserved   uint32    0
 ========== ========= ===============================================================
+
+Jolt reports contacts to its listeners before its solver runs, so the impulse
+of a begin record is Jolt's ``EstimateCollisionResponse`` for the two bodies
+alone, and no record carries the impulse the solver applied.
 
 A record has no time field. Simulation time is exactly ``tick / tick_hz``,
 which :func:`event_times` computes.
@@ -44,10 +49,11 @@ EVENT_DTYPE = np.dtype(
         ('tick', '<u4'),
         ('a', '<u4'),
         ('b', '<u4'),
-        ('point', '<f4', (3,)),
+        ('point', '<f8', (3,)),
         ('normal', '<f4', (3,)),
         ('approach', '<f4'),
         ('impulse', '<f4'),
+        ('reserved', '<u4'),
     ]
 )
 if EVENT_DTYPE.itemsize != _native.EVENT_SIZE:  # pragma: no cover - a build defect

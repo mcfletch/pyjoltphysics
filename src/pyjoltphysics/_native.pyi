@@ -26,7 +26,7 @@ class CallbackFailed(RuntimeError):
 class WorldStopped(RuntimeError):
     pass
 
-EVENT_SIZE: int = 48
+EVENT_SIZE: int = 64
 
 class Snapshot:
     """The state of every body after one tick."""
@@ -72,10 +72,32 @@ class World:
 
     def __init__(self, *, tick_hz: float = 120.0, max_catch_up: float = 0.1, gravity: Sequence[float] = (0.0, -9.81, 0.0), threads: int = 4, max_bodies: int = 65536, max_body_pairs: int = 65536, max_contact_constraints: int = 65536, event_capacity: int = 65536, allow_sleeping: bool = True, time_before_sleep: float = 0.5, sleep_velocity: float = 0.03, min_velocity_for_restitution: float = 1.0, collision_steps: int = 1, temp_allocator_mb: int = 16) -> None: ...
 
-    def add_bodies(self, position: Annotated[NDArray[numpy.float64], dict(shape=(None, 3), order='C', device='cpu', writable=False)], orientation: Annotated[NDArray[numpy.float64], dict(shape=(None, 4), order='C', device='cpu', writable=False)], shape_kind: Annotated[NDArray[numpy.uint8], dict(shape=(None,), order='C', device='cpu', writable=False)], shape_params: Annotated[NDArray[numpy.float64], dict(shape=(None, 4), order='C', device='cpu', writable=False)], motion: Annotated[NDArray[numpy.uint8], dict(shape=(None,), order='C', device='cpu', writable=False)], mass: Annotated[NDArray[numpy.float64], dict(shape=(None,), order='C', device='cpu', writable=False)], density: Annotated[NDArray[numpy.float64], dict(shape=(None,), order='C', device='cpu', writable=False)], friction: Annotated[NDArray[numpy.float32], dict(shape=(None,), order='C', device='cpu', writable=False)], restitution: Annotated[NDArray[numpy.float32], dict(shape=(None,), order='C', device='cpu', writable=False)], linear_damping: Annotated[NDArray[numpy.float32], dict(shape=(None,), order='C', device='cpu', writable=False)], angular_damping: Annotated[NDArray[numpy.float32], dict(shape=(None,), order='C', device='cpu', writable=False)], gravity_factor: Annotated[NDArray[numpy.float32], dict(shape=(None,), order='C', device='cpu', writable=False)], linear_velocity: Annotated[NDArray[numpy.float64], dict(shape=(None, 3), order='C', device='cpu', writable=False)], angular_velocity: Annotated[NDArray[numpy.float64], dict(shape=(None, 3), order='C', device='cpu', writable=False)], group: Annotated[NDArray[numpy.uint32], dict(shape=(None,), order='C', device='cpu', writable=False)], mask: Annotated[NDArray[numpy.uint32], dict(shape=(None,), order='C', device='cpu', writable=False)], flags: Annotated[NDArray[numpy.uint32], dict(shape=(None,), order='C', device='cpu', writable=False)], at_tick: int = 0) -> tuple[Annotated[NDArray[numpy.uint32], dict(shape=(None,))], int]:
+    def add_bodies(self, position: Annotated[NDArray[numpy.float64], dict(shape=(None, 3), order='C', device='cpu', writable=False)], orientation: Annotated[NDArray[numpy.float64], dict(shape=(None, 4), order='C', device='cpu', writable=False)], shape_kind: Annotated[NDArray[numpy.uint8], dict(shape=(None,), order='C', device='cpu', writable=False)], shape_params: Annotated[NDArray[numpy.float64], dict(shape=(None, 4), order='C', device='cpu', writable=False)], shape_id: Annotated[NDArray[numpy.uint32], dict(shape=(None,), order='C', device='cpu', writable=False)], scale: Annotated[NDArray[numpy.float64], dict(shape=(None, 3), order='C', device='cpu', writable=False)], shape_offset: Annotated[NDArray[numpy.float64], dict(shape=(None, 3), order='C', device='cpu', writable=False)], shape_rotation: Annotated[NDArray[numpy.float64], dict(shape=(None, 4), order='C', device='cpu', writable=False)], center_of_mass: Annotated[NDArray[numpy.float64], dict(shape=(None, 3), order='C', device='cpu', writable=False)], motion: Annotated[NDArray[numpy.uint8], dict(shape=(None,), order='C', device='cpu', writable=False)], mass: Annotated[NDArray[numpy.float64], dict(shape=(None,), order='C', device='cpu', writable=False)], density: Annotated[NDArray[numpy.float64], dict(shape=(None,), order='C', device='cpu', writable=False)], friction: Annotated[NDArray[numpy.float32], dict(shape=(None,), order='C', device='cpu', writable=False)], restitution: Annotated[NDArray[numpy.float32], dict(shape=(None,), order='C', device='cpu', writable=False)], linear_damping: Annotated[NDArray[numpy.float32], dict(shape=(None,), order='C', device='cpu', writable=False)], angular_damping: Annotated[NDArray[numpy.float32], dict(shape=(None,), order='C', device='cpu', writable=False)], gravity_factor: Annotated[NDArray[numpy.float32], dict(shape=(None,), order='C', device='cpu', writable=False)], linear_velocity: Annotated[NDArray[numpy.float64], dict(shape=(None, 3), order='C', device='cpu', writable=False)], angular_velocity: Annotated[NDArray[numpy.float64], dict(shape=(None, 3), order='C', device='cpu', writable=False)], group: Annotated[NDArray[numpy.uint32], dict(shape=(None,), order='C', device='cpu', writable=False)], mask: Annotated[NDArray[numpy.uint32], dict(shape=(None,), order='C', device='cpu', writable=False)], flags: Annotated[NDArray[numpy.uint32], dict(shape=(None,), order='C', device='cpu', writable=False)], at_tick: int = 0) -> tuple[Annotated[NDArray[numpy.uint32], dict(shape=(None,))], int]:
         """
         Queue bodies to add; return their uids and the batch's sequence number.
         """
+
+    def add_convex(self, points: Annotated[NDArray[numpy.float64], dict(shape=(None, 3), order='C', device='cpu', writable=False)], max_convex_radius: float, hull_tolerance: float) -> int:
+        """Build and register a convex hull; return its shape id."""
+
+    def add_mesh(self, points: Annotated[NDArray[numpy.float64], dict(shape=(None, 3), order='C', device='cpu', writable=False)], triangles: Annotated[NDArray[numpy.uint32], dict(shape=(None, 3), order='C', device='cpu', writable=False)]) -> int:
+        """Build and register a triangle mesh; return its shape id."""
+
+    def add_heightfield(self, heights: Annotated[NDArray[numpy.float32], dict(shape=(None, None), order='C', device='cpu', writable=False)], origin: Sequence[float], spacing: Sequence[float], block_size: int, bits_per_sample: int, min_height: float, max_height: float) -> int:
+        """Build and register a height field; return its shape id."""
+
+    def add_compound(self, children: Annotated[NDArray[numpy.uint32], dict(shape=(None,), order='C', device='cpu', writable=False)], positions: Annotated[NDArray[numpy.float64], dict(shape=(None, 3), order='C', device='cpu', writable=False)], orientations: Annotated[NDArray[numpy.float64], dict(shape=(None, 4), order='C', device='cpu', writable=False)], mutable: bool) -> int:
+        """
+        Build and register a compound of registered shapes; return its shape id.
+        """
+
+    def add_primitive(self, kind: int, params: Sequence[float]) -> int:
+        """Register a primitive shape; return its shape id."""
+
+    def remove_shape(self, shape_id: int) -> bool:
+        """Forget a shape id; bodies made with the shape keep it."""
+
+    def shape_info(self, shape_id: int) -> dict[str, object]: ...
 
     def remove_bodies(self, uids: Annotated[NDArray[numpy.uint32], dict(shape=(None,), order='C', device='cpu', writable=False)], at_tick: int = 0) -> int: ...
 

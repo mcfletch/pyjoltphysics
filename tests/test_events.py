@@ -12,6 +12,7 @@ from pyjoltphysics import (
     EventKind,
     EventPhase,
     MotionType,
+    Shape,
     event_times,
 )
 from pyjoltphysics.testing import MakeWorld, floor, grid
@@ -22,8 +23,10 @@ def of(events: np.ndarray, kind: EventKind, phase: EventPhase) -> np.ndarray:
     return chosen
 
 
-def test_the_record_is_48_bytes() -> None:
-    assert EVENT_DTYPE.itemsize == 48
+def test_the_record_is_64_bytes() -> None:
+    assert EVENT_DTYPE.itemsize == 64
+    assert EVENT_DTYPE.fields is not None
+    assert EVENT_DTYPE.fields['point'][0] == np.dtype(('<f8', (3,)))
     assert EVENT_DTYPE.names == (
         'kind',
         'phase',
@@ -35,6 +38,7 @@ def test_the_record_is_48_bytes() -> None:
         'normal',
         'approach',
         'impulse',
+        'reserved',
     )
 
 
@@ -192,3 +196,110 @@ def test_event_order_is_the_same_with_any_thread_count(make_world: MakeWorld) ->
         world.run_ticks(300)
         runs.append(world.drain_events())
     assert runs[0].tobytes() == runs[1].tobytes()
+
+
+def test_a_compound_touching_with_several_children_is_one_pair(make_world: MakeWorld) -> None:
+    world = make_world(threads=1)
+    (ground,), _ = world.add_bodies(floor())
+    legs = Shape.compound(
+        [(Shape.box((0.2, 1.0, 0.2)), (x, 0.0, z)) for x in (-0.5, 0.5) for z in (-0.5, 0.5)]
+        + [(Shape.box((1.2, 0.1, 1.2)), (0.0, 0.55, 0.0))]
+    )
+    (table,), _ = world.add_bodies(BodyBatch.of_shape([(0.0, 1.0, 0.0)], legs, mass=10.0))
+    world.run_ticks(240)
+    world.add_impulses([table], (0.0, 60.0, 0.0))
+    world.run_ticks(240)
+    events = world.drain_events()
+    begins = of(events, EventKind.CONTACT, EventPhase.BEGIN)
+    ends = of(events, EventKind.CONTACT, EventPhase.END)
+    # Four legs land at once and again after the hop: one begin and one end per touch.
+    assert [(e['a'], e['b']) for e in begins] == [(ground, table)] * 2
+    assert [(e['a'], e['b']) for e in ends] == [(ground, table)]
+
+
+def test_a_sensor_added_over_a_sleeping_body_reports_it(make_world: MakeWorld) -> None:
+    world = make_world(threads=1)
+    world.add_bodies(floor())
+    (box,), _ = world.add_bodies(BodyBatch.boxes([(0.0, 0.5, 0.0)]))
+    world.run_ticks(300)
+    snapshot = world.latest()
+    assert snapshot is not None and not snapshot.awake[snapshot.rows[int(box)]]
+    world.drain_events()
+    (sensor,), _ = world.add_bodies(
+        BodyBatch.boxes(
+            [(0.0, 1.0, 0.0)], size=(3, 2, 3), motion=MotionType.STATIC, flags=BodyFlag.SENSOR
+        )
+    )
+    world.run_ticks(300)
+    events = world.drain_events()
+    enters = of(events, EventKind.TRIGGER, EventPhase.BEGIN)
+    assert [(e['a'], e['b']) for e in enters] == [(sensor, box)]
+    assert enters[0]['tick'] <= 302
+    # The box falls asleep again, held inside.
+    assert len(of(events, EventKind.TRIGGER, EventPhase.END)) == 0
+    snapshot = world.latest()
+    assert snapshot is not None and not snapshot.awake[snapshot.rows[int(box)]]
+
+
+def test_a_kinematic_sensor_reports_static_bodies(make_world: MakeWorld) -> None:
+    world = make_world(threads=1)
+    (wall,), _ = world.add_bodies(BodyBatch.boxes([(0.0, 0.0, 0.0)], motion=MotionType.STATIC))
+    (sensor,), _ = world.add_bodies(
+        BodyBatch.spheres(
+            [(-3.0, 0.0, 0.0)],
+            radius=0.5,
+            motion=MotionType.KINEMATIC,
+            linear_velocity=(6.0, 0.0, 0.0),
+            flags=BodyFlag.SENSOR,
+        )
+    )
+    world.run_ticks(120)
+    events = world.drain_events()
+    pairs = [(e['a'], e['b']) for e in of(events, EventKind.TRIGGER, EventPhase.BEGIN)]
+    assert pairs == [(sensor, wall)]
+    assert len(of(events, EventKind.TRIGGER, EventPhase.END)) == 1
+
+
+def test_a_continuous_bullet_stops_at_a_thin_mesh_wall(make_world: MakeWorld) -> None:
+    world = make_world(threads=1, gravity=(0.0, 0.0, 0.0))
+    # A single two-sided quad in the x = 0 plane.
+    points = np.array([(0, -2, -2), (0, 2, -2), (0, 2, 2), (0, -2, 2)], float)
+    quad = np.array([(0, 1, 2), (0, 2, 3), (0, 2, 1), (0, 3, 2)], np.uint32)
+    world.add_bodies(BodyBatch.meshes([(0.0, 0.0, 0.0)], points, quad))
+    uids, _ = world.add_bodies(
+        BodyBatch.spheres(
+            [(-2.0, 0.0, 0.5), (-2.0, 0.0, -0.5)],
+            radius=0.05,
+            linear_velocity=(400.0, 0.0, 0.0),
+            flags=[BodyFlag.CONTINUOUS, BodyFlag.NONE],
+        )
+    )
+    world.run_ticks(4)
+    snapshot = world.latest()
+    assert snapshot is not None
+    x = snapshot.position[snapshot.rows_of(uids), 0]
+    assert x[0] < 0.0  # stopped
+    assert x[1] > 0.0  # tunnelled
+
+
+def test_event_points_keep_millimetres_five_kilometres_out(make_world: MakeWorld) -> None:
+    world = make_world(threads=1)
+    far = 5000.123456
+    world.add_bodies(BodyBatch.plane(position=(far, 0.0, far)))
+    world.add_bodies(BodyBatch.spheres([(far, 1.0, far)], radius=0.5))
+    world.run_ticks(120)
+    begin = of(world.drain_events(), EventKind.CONTACT, EventPhase.BEGIN)[0]
+    assert begin['point'].dtype == np.float64
+    np.testing.assert_allclose(begin['point'], (far, 0.0, far), atol=2e-3)
+
+
+def test_persist_records_carry_no_impulse(make_world: MakeWorld) -> None:
+    world = make_world(threads=1, allow_sleeping=False)
+    world.add_bodies(floor())
+    world.add_bodies(BodyBatch.boxes([(0.0, 2.0, 0.0)], flags=BodyFlag.REPORT))
+    world.run_ticks(120)
+    events = world.drain_events()
+    assert of(events, EventKind.CONTACT, EventPhase.BEGIN)['impulse'][0] > 0.0
+    persists = of(events, EventKind.CONTACT, EventPhase.PERSIST)
+    assert len(persists) > 0
+    assert (persists['impulse'] == 0.0).all()
