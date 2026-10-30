@@ -143,8 +143,9 @@ ignore = [
 
 [tool.ruff.lint.per-file-ignores]
 # A test that pins an error signature calls the thing that raises, and
-# `pytest.raises` is the assertion, so its result is unused.
-"tests/*" = ["ARG001", "ARG002"]
+# `pytest.raises` is the assertion, so its result is unused. A world callback
+# takes (tick, time) whether or not the test reads both.
+"tests/*" = ["ARG001", "ARG002", "ARG005"]
 # The stub is nanobind's output, committed as generated.
 "src/pyjoltphysics/_native.pyi" = ["ALL"]
 
