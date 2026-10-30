@@ -1371,6 +1371,12 @@ void bind_world(nb::module_ &m) {
             },
             nb::arg("uids"), nb::arg("bits"), nb::arg("on"), nb::arg("at_tick") = 0)
         .def(
+            "flush",
+            [](World &w) {
+                nb::gil_scoped_release release;
+                w.core().flush();
+            })
+        .def(
             "save_state",
             [](World &w) {
                 std::string data;

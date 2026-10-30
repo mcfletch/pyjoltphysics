@@ -976,6 +976,17 @@ class World:
             raise ValueError('only REPORT, NO_SLEEP and FILTER_CONTACTS change after a body is added')
         return self._native.set_flags(_uids(uids), bits, bool(on), at_tick)
 
+    def flush(self) -> None:
+        """Apply the batches due at the current tick now, on the calling thread, without stepping.
+
+        Queries then meet the bodies those batches add and miss the ones they
+        remove. The world lock is taken exclusively for the apply, so a
+        free-running world thread waits for it between its own phases; on the
+        world thread, inside a callback, it does nothing. The next snapshot
+        published shows the changes.
+        """
+        self._native.flush()
+
     def save_state(self) -> bytes:
         """The bodies' and joints' state (Jolt's ``PhysicsSystem::SaveState``), read between ticks.
 

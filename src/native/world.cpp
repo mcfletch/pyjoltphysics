@@ -477,6 +477,28 @@ bool WorldCore::run_python_after(uint64_t tick) {
     });
 }
 
+void WorldCore::flush() {
+    check();
+    if (on_world_thread())
+        return;
+    const uint64_t index = tick_.load();
+    std::unique_lock<WorldLock> exclusive(world_lock_);
+    std::vector<Batch> due;
+    queue_.take_due(index, due);
+    for (Batch &batch : due) {
+        apply(batch, index);
+        note_applied(batch.seq);
+    }
+    characters_->flush_events(tick_events_);
+    if (!due.empty()) {
+        std::lock_guard<std::mutex> guard(applied_lock_);
+        for (const Batch &batch : due) {
+            applied_log_.push_back(batch.seq);
+            applied_log_.push_back(index);
+        }
+    }
+}
+
 bool WorldCore::tick_once() {
     const auto t0 = Clock::now();
     const uint64_t index = tick_.load();

@@ -5,7 +5,7 @@ from __future__ import annotations
 import numpy as np
 import pytest
 
-from pyjoltphysics import BodyBatch, BodyFlag, EventKind, EventPhase, World
+from pyjoltphysics import BodyBatch, BodyFlag, EventKind, EventPhase, MotionType, World
 from pyjoltphysics.testing import MakeWorld, floor, latest
 
 
@@ -198,3 +198,34 @@ def test_penetration_slop_bounds_how_far_a_resting_box_sinks(make_world: MakeWor
 def test_penetration_slop_refuses_negative(make_world: MakeWorld) -> None:
     with pytest.raises(ValueError, match='penetration_slop'):
         make_world(penetration_slop=-1.0)
+
+
+def test_flush_applies_batches_without_stepping(make_world: MakeWorld) -> None:
+    world = make_world(tick_hz=60.0, threads=1)
+    world.run_ticks(1)
+    (box,), seq = world.add_bodies(BodyBatch.boxes([(0.0, 0.0, 0.0)], size=(2.0, 2.0, 2.0),
+                                                   motion=MotionType.STATIC))
+    assert world.raycast((0.0, 5.0, 0.0), (0.0, -1.0, 0.0)) is None
+    world.flush()
+    hit = world.raycast((0.0, 5.0, 0.0), (0.0, -1.0, 0.0))
+    assert hit is not None and hit.uid == box
+    assert world.tick == 1
+    world.remove_bodies([box])
+    world.flush()
+    assert world.raycast((0.0, 5.0, 0.0), (0.0, -1.0, 0.0)) is None
+    applied = world.drain_applied()
+    assert [int(s) for s, _t in applied] == [seq, seq + 1]
+
+
+def test_flush_beside_a_free_running_world(make_world: MakeWorld) -> None:
+    world = make_world(tick_hz=240.0, threads=2)
+    world.add_bodies(BodyBatch.spheres(np.random.default_rng(1).uniform(-5, 5, (200, 3)), radius=0.2,
+                                       gravity_factor=0.0, linear_velocity=(0.0, 0.0, 1.0)))
+    world.start()
+    for x in range(50):
+        (post,), _ = world.add_bodies(BodyBatch.boxes([(x * 10.0 + 100.0, 0.0, 0.0)],
+                                                      size=(1.0, 1.0, 1.0), motion=MotionType.STATIC))
+        world.flush()
+        hit = world.raycast((x * 10.0 + 100.0, 5.0, 0.0), (0.0, -1.0, 0.0))
+        assert hit is not None and hit.uid == post
+    world.stop()

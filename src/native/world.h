@@ -149,6 +149,9 @@ public:
     void start();
     void stop();
     void run_ticks(uint64_t count);
+    // Applies the batches due at the current tick on the calling thread, under
+    // the world lock, without stepping; nothing on the world thread itself.
+    void flush();
     bool wait_tick(uint64_t tick, double timeout);
     bool lockstep() const;
     bool on_world_thread() const { return std::this_thread::get_id() == thread_id_.load(); }
