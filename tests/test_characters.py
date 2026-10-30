@@ -15,6 +15,7 @@ import pytest
 
 from pyjoltphysics import (
     BodyBatch,
+    BodyFlag,
     Character,
     CharacterCapabilities,
     CharacterState,
@@ -491,6 +492,61 @@ def test_a_crate_heavier_than_push_mass_blocks_the_walker(make_world: MakeWorld)
     rig.step(3.0)
     assert rig.x_of(crate) == pytest.approx(1.5, abs=0.02)
     assert walker.position[0] < 1.5 - 0.4 - 0.3 + 0.05
+
+
+def test_a_thrown_crate_shoves_the_walker_and_is_slowed_by_it(make_world: MakeWorld) -> None:
+    rig = Rig(make_world)
+    walker = rig.character()
+    crate = rig.box(
+        (0.8, 0.8, 0.8),
+        (3.0, 0.9, 0.0),
+        motion=MotionType.DYNAMIC,
+        mass=20.0,
+        gravity_factor=0.0,
+        linear_velocity=(-8.0, 0.0, 0.0),
+    )
+    rig.step(0.5)
+    snapshot = rig.world.latest()
+    assert snapshot is not None
+    # Jolt's character contact moves the capsule out of the crate as it comes
+    # in, and the character's pushes take the crate's speed.
+    assert walker.position[0] < -0.2
+    assert snapshot.linear_velocity[snapshot.rows[crate], 0] > -4.0
+
+
+def test_a_character_enters_and_leaves_a_trigger(make_world: MakeWorld) -> None:
+    rig = Rig(make_world)
+    zone = rig.box((1.0, 2.0, 4.0), (2.0, 1.0, 0.0), flags=BodyFlag.SENSOR)
+    walker = rig.character()
+    rig.world.drain_events()
+    walker.set_move((1.0, 0.0, 0.0))
+    rig.step(2.0)
+    events = rig.world.drain_events()
+    mine = events[(events['kind'] == EventKind.TRIGGER) & (events['a'] == zone)]
+    assert mine['b'].tolist() == [walker.id, walker.id]
+    assert mine['phase'].tolist() == [EventPhase.BEGIN, EventPhase.END]
+
+
+def test_a_character_proxy_touches_no_solid_body(make_world: MakeWorld) -> None:
+    rig = Rig(make_world)
+    rig.box((0.8, 0.8, 0.8), (3.0, 0.4, 0.0), motion=MotionType.DYNAMIC, mass=20.0)
+    walker = rig.character()
+    walker.set_move((1.0, 0.0, 0.0))
+    rig.step(2.0)
+    events = rig.world.drain_events()
+    assert not (
+        (events['kind'] == EventKind.CONTACT)
+        & ((events['a'] == walker.id) | (events['b'] == walker.id))
+    ).any()
+
+
+def test_a_moving_wall_pushes_a_standing_character(make_world: MakeWorld) -> None:
+    rig = Rig(make_world)
+    wall = rig.box((0.4, 2.0, 4.0), (-1.0, 1.0, 0.0), motion=MotionType.KINEMATIC)
+    walker = rig.character()
+    rig.world.set_velocities([wall], linear=(1.0, 0.0, 0.0))
+    rig.step(2.0)
+    assert walker.position[0] == pytest.approx(rig.x_of(wall) + 0.2 + 0.3, abs=0.05)
 
 
 def test_a_walker_on_a_moving_platform_is_carried(make_world: MakeWorld) -> None:

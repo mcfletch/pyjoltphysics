@@ -152,6 +152,7 @@ public:
 
 private:
     Character *find(Uid id);
+    const Character *find(Uid id) const;
     void islands(double dt);
 
     JPH::PhysicsSystem &system_;

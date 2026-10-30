@@ -121,6 +121,7 @@ struct Character {
     JPH::Vec3 ground_normal = JPH::Vec3::sZero();
     Uid ground_uid = kNoBody;
     bool pushing = false;  // walked into a body it can push, last tick
+    bool teleported = true;  // the proxy is put, not moved, where the character is
     std::vector<Uid> touching;  // ascending
     std::vector<Event> events;
 
@@ -354,7 +355,7 @@ struct CharacterSystem::Listener final : public JPH::CharacterContactListener {
     JPH::PhysicsSystem *system = nullptr;
 
     void decide(const JPH::CharacterVirtual *cv, const JPH::CharacterContact &contact,
-                JPH::CharacterContactSettings &settings) const {
+                 JPH::CharacterContactSettings &settings) const {
         if (contact.mMotionTypeB != JPH::EMotionType::Dynamic)
             return;
         auto *character = reinterpret_cast<Character *>(cv->GetUserData());
@@ -394,6 +395,12 @@ std::vector<JPH::BodyID> CharacterSystem::remove_all() {
             proxies.push_back(c->proxy);
     characters_.clear();
     return proxies;
+}
+
+const Character *CharacterSystem::find(Uid id) const {
+    auto at = std::lower_bound(characters_.begin(), characters_.end(), id,
+                               [](const std::unique_ptr<Character> &c, Uid v) { return c->id < v; });
+    return at != characters_.end() && (*at)->id == id ? at->get() : nullptr;
 }
 
 Character *CharacterSystem::find(Uid id) {
@@ -696,7 +703,9 @@ void CharacterSystem::add(const AddCharacter &add, JPH::ObjectLayer proxy_layer,
     if (add.proxy) {
         JPH::BodyCreationSettings body(capsule(c.caps.stand_height, c.caps.radius), feet, JPH::Quat::sIdentity(),
                                        JPH::EMotionType::Kinematic, proxy_layer);
-        body.mIsSensor = true;
+        // Not a sensor, so that sensors (static ones included) meet it; its
+        // layer meets sensors and nothing else. Rays and sweeps meet it.
+        body.mCollideKinematicVsNonDynamic = true;
         body.mAllowSleeping = false;
         body.mUserData = user_data(add.uid, flag::kCharacter);
         JPH::BodyInterface &bodies = system_.GetBodyInterfaceNoLock();
@@ -863,6 +872,7 @@ bool CharacterSystem::apply(const CharacterOp &op, uint32_t tick, JPH::TempAlloc
         break;
     }
     case CharacterOpCode::Teleport: {
+        c.teleported = true;
         const JPH::RVec3 feet(op.v[0], op.v[1] - 0.5 * c.height(), op.v[2]);
         c.cv->SetPosition(feet);
         c.cv->SetLinearVelocity(JPH::Vec3::sZero());
@@ -1022,7 +1032,13 @@ void CharacterSystem::step(double dt, uint32_t tick, JPH::JobSystem &jobs, std::
                                 JPH::EActivation::Activate);
                 c.proxy_height = float(c.shape_height);
             }
-            bodies.SetPositionAndRotation(c.proxy, c.feet(), JPH::Quat::sIdentity(), JPH::EActivation::Activate);
+            // Moved over the step to where the character now is, so a sensor
+            // sees it move; put there after a teleport.
+            if (c.teleported)
+                bodies.SetPositionAndRotation(c.proxy, c.feet(), JPH::Quat::sIdentity(), JPH::EActivation::Activate);
+            else
+                bodies.MoveKinematic(c.proxy, c.feet(), JPH::Quat::sIdentity(), float(dt));
+            c.teleported = false;
         }
         events.insert(events.end(), c.events.begin(), c.events.end());
         c.events.clear();

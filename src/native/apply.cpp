@@ -72,19 +72,21 @@ void WorldCore::apply(AddBodies &add, uint64_t) {
     size_t statics = 0;
     // Consecutive rows usually share their collision triple.
     uint32_t last_group = 0, last_mask = 0;
-    bool last_moving = false, have_layer = false;
+    bool last_moving = false, last_sensor = false, have_layer = false;
     JPH::ObjectLayer layer = 0;
     for (size_t i = 0; i < count; ++i) {
         const auto motion = static_cast<Motion>(add.motion[i]);
         const uint32_t flags = add.flags[i];
         const JPH::Shape *shape = add.shapes[i].GetPtr();
         const bool moving = motion != Motion::Static;
+        const bool sensor = (flags & flag::kSensor) != 0;
         if (!have_layer || add.group[i] != last_group || add.mask[i] != last_mask ||
-            moving != last_moving) {
-            layer = layers_.layer(add.group[i], add.mask[i], moving);
+            moving != last_moving || sensor != last_sensor) {
+            layer = layers_.layer(add.group[i], add.mask[i], moving, sensor ? LayerRole::Sensor : LayerRole::Body);
             last_group = add.group[i];
             last_mask = add.mask[i];
             last_moving = moving;
+            last_sensor = sensor;
             have_layer = true;
         }
         JPH::BodyCreationSettings settings(shape, rvec3(add.position, i), quat(add.orientation, i),
@@ -313,7 +315,7 @@ void WorldCore::apply(SwapBodies &swap, uint64_t index) {
 }
 
 void WorldCore::apply(AddCharacter &add, uint64_t) {
-    const JPH::ObjectLayer layer = layers_.layer(add.group, add.mask, true);
+    const JPH::ObjectLayer layer = layers_.layer(add.group, add.mask, true, LayerRole::Proxy);
     collector_.quiet = true;
     characters_->add(add, layer, *temp_);
     collector_.quiet = false;

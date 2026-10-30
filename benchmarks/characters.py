@@ -26,7 +26,8 @@ A frame is 1/60 s: ``--tick-hz 60`` runs one tick a frame, 120 two. Reported in
 milliseconds per frame: ``frame_ms``, the caller's wall time for its inputs
 and ``run_ticks``; ``characters_ms``, the world thread's time moving the
 characters; ``step_ms``, ``PhysicsSystem::Update``. ``--rough`` turns enhanced
-internal edge removal off for the ground and the characters.
+internal edge removal off for the ground and the characters; ``--no-proxy``
+adds the characters without proxy bodies.
 """
 
 from __future__ import annotations
@@ -88,7 +89,7 @@ def summary(walls: list[float]) -> dict[str, float]:
 
 
 def characters_case(
-    name: str, threads: int, frames: int, tick_hz: float, rough: bool
+    name: str, threads: int, frames: int, tick_hz: float, rough: bool, proxy: bool = True
 ) -> dict[str, object]:
     count = 300 if name == 'chars300_hf' else 30
     flags = BodyFlag.NO_SMOOTH_EDGES if rough else BodyFlag.NONE
@@ -105,7 +106,7 @@ def characters_case(
             )
             world.add_bodies(BodyBatch.boxes(posts(10_000), size=POST, motion=MotionType.STATIC))
         caps = CharacterCapabilities(smoothEdges=not rough)
-        made = [world.add_character(tuple(p), caps) for p in starts(count).tolist()]
+        made = [world.add_character(tuple(p), caps, proxy=proxy) for p in starts(count).tolist()]
         ids = np.array([c.id for c in made], np.uint32)
         ticks = round(tick_hz / 60.0)
         codes = np.zeros(count, np.uint8)
@@ -135,6 +136,7 @@ def characters_case(
             'threads': threads,
             'tick_hz': tick_hz,
             'rough': rough,
+            'proxy': proxy,
             'characters': len(rows),
             'grounded': int(rows.grounded.sum()),
             **summary(walls),
@@ -289,6 +291,7 @@ def main() -> None:
     parser.add_argument('--frames', type=int, default=240)
     parser.add_argument('--tick-hz', type=float, nargs='+', default=[60.0, 120.0])
     parser.add_argument('--rough', action='store_true')
+    parser.add_argument('--no-proxy', action='store_true')
     args = parser.parse_args()
     for case in args.case:
         for threads in args.threads:
@@ -300,7 +303,9 @@ def main() -> None:
                 result = query_wait_case(threads, 5.0)
             else:
                 for tick_hz in args.tick_hz:
-                    result = characters_case(case, threads, args.frames, tick_hz, args.rough)
+                    result = characters_case(
+                        case, threads, args.frames, tick_hz, args.rough, not args.no_proxy
+                    )
                     result['python'] = sys.version.split()[0]
                     print(json.dumps(result), flush=True)
                 continue

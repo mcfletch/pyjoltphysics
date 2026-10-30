@@ -471,11 +471,14 @@ group=1, mask=ALL_GROUPS, ignore=(), proxy=True)` returns a `Character` whose
 m/s2 downward, by default the length of the world's. Characters of one
 `pass_group` (other than 0) pass through each other; others block and push
 each other. `group` and `mask` choose the bodies it meets, as for bodies;
-`ignore` names bodies it passes through. With `proxy` a kinematic sensor
-capsule stands in the world under the character's id: rays and sweeps meet it
-(`QueryFilter(characters=False)` passes it over) and sensors and moving bodies
-make trigger records with it. `remove_characters(ids)` takes characters and
-their proxies out.
+`ignore` names bodies it passes through. With `proxy` a kinematic capsule
+stands in the world under the character's id, moved over each step to where
+the character is: rays, sweeps and overlaps meet it
+(`QueryFilter(characters=False)` passes it over) and sensors, static ones
+included, make trigger records with it as their `b`. Its collision layer meets
+sensors and nothing else, so no body is solved against it; the character meets
+bodies itself. `remove_characters(ids)` takes characters and their proxies
+out.
 
 `CharacterCapabilities` keeps omi_physics' field names and meanings:
 
@@ -555,15 +558,20 @@ order within their island. The results are the same with any number of job
 threads, and a free-running run replays bit for bit in lockstep with 1 or 8
 job threads (tests/test_character_lockstep.py).
 
-Measured (`benchmarks/characters.py`, ms per 60 Hz frame): 300 characters
-running on a 256 x 256 height field, 1.49 ms on 1 job thread and 0.95 ms on 8
-at one tick a frame, 2.84 and 2.11 ms at 120 Hz (two ticks a frame); 30
-characters among 10,000 posts on the 20,000 triangle ground, 0.17 and 0.09 ms
-(0.30 and 0.19 at 120 Hz).
+Measured (`benchmarks/characters.py`, ms per 60 Hz frame, with proxies): 300
+characters running on a 256 x 256 height field, 1.49 ms on 1 job thread and
+0.95 ms on 8 at one tick a frame, 2.84 and 2.11 ms at 120 Hz (two ticks a
+frame); 30 characters among 10,000 posts on the 20,000 triangle ground, 0.17
+and 0.09 ms (0.30 and 0.19 at 120 Hz). The 300 proxies add 0.09 ms a tick to
+`PhysicsSystem::Update` on 1 job thread.
 
-What it does not do: a body thrown at a character does not knock it back (the
-proxy is a sensor; the trigger record says it struck), and a moving body
-other than the ground pushes a character only while the character moves.
+Bodies moving into a character: a kinematic body (a door, a lift wall) pushes
+it at the body's speed. A dynamic body is met by Jolt's character contact: the
+capsule is moved out of it as it comes in, and the character's push slows a
+body it could push; the character keeps none of the body's momentum, so a
+thrown crate shoves it while they overlap rather than knocking it back at a
+share of the crate's speed. The character's `BEGIN` record names the body and
+its closing speed for a caller that applies `knockback`.
 
 ## Streaming ground
 

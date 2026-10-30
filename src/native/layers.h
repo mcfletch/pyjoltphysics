@@ -3,9 +3,9 @@
 // Each body carries a collision group and a mask, both 32-bit. Two bodies
 // collide when each one's group shares a bit with the other's mask. Jolt
 // names a body's layer by a 16-bit ObjectLayer, so every distinct
-// (group, mask, moving) triple a world uses gets one, assigned on first use.
+// (group, mask, moving, role) a world uses gets one, assigned on first use.
 // Static bodies sit in one broad-phase tree and moving bodies in another, and
-// two static bodies never collide.
+// two static bodies never collide. A character's proxy meets sensors only.
 #pragma once
 
 #include "common.h"
@@ -18,6 +18,8 @@
 #include <vector>
 
 namespace pj {
+
+enum class LayerRole : uint8_t { Body = 0, Sensor = 1, Proxy = 2 };
 
 namespace broadphase {
 constexpr JPH::BroadPhaseLayer kStatic(0);
@@ -33,7 +35,7 @@ class CollisionLayers final : public JPH::BroadPhaseLayerInterface,
 public:
     // The layer for this triple, assigned on first use. Throws when every
     // 16-bit layer is in use.
-    JPH::ObjectLayer layer(uint32_t group, uint32_t mask, bool moving);
+    JPH::ObjectLayer layer(uint32_t group, uint32_t mask, bool moving, LayerRole role = LayerRole::Body);
     // The same group and mask with the other motion class, for set_motion_type.
     JPH::ObjectLayer with_motion(JPH::ObjectLayer current, bool moving);
     size_t size() const { return entries_.size(); }
@@ -58,6 +60,9 @@ public:
     bool ShouldCollide(JPH::ObjectLayer a, JPH::ObjectLayer b) const override {
         const Entry &x = entries_[a];
         const Entry &y = entries_[b];
+        if ((x.role == LayerRole::Proxy || y.role == LayerRole::Proxy) &&
+            !(x.role == LayerRole::Sensor || y.role == LayerRole::Sensor))
+            return false;
         return (x.moving || y.moving) && (x.group & y.mask) != 0 && (y.group & x.mask) != 0;
     }
 
@@ -66,9 +71,10 @@ private:
         uint32_t group;
         uint32_t mask;
         bool moving;
+        LayerRole role;
     };
     std::vector<Entry> entries_;
-    std::map<std::tuple<uint32_t, uint32_t, bool>, JPH::ObjectLayer> index_;
+    std::map<std::tuple<uint32_t, uint32_t, bool, LayerRole>, JPH::ObjectLayer> index_;
 };
 
 }  // namespace pj
