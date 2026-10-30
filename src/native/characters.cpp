@@ -599,10 +599,15 @@ void step_one(const JPH::PhysicsSystem &system, Character &c, double dt, uint32_
     const JPH::Vec3 velocity =
         (horizontal + carried) * float(dt * per) + JPH::Vec3(0.0f, float(rise * per), 0.0f);
     c.cv->SetLinearVelocity(velocity);
-    update.mStickToFloorStepDown = (c.caps.stick_to_floor && was_grounded && v0 <= 1e-6)
-                                       ? JPH::Vec3(0.0f, -c.caps.step_height, 0.0f)
-                                       : JPH::Vec3::sZero();
+    update.mStickToFloorStepDown = JPH::Vec3::sZero();
     c.cv->ExtendedUpdate(dt_f, gravity, update, kEveryTree, c.layer_filter, c.body_filter, kEveryShape, temp);
+    // A walker that was on the ground and did not jump is held to it over a
+    // drop of up to its step height. Jolt's own stick (in ExtendedUpdate)
+    // passes over a walker climbing a slope whose crest it crosses, since
+    // that walker is moving up.
+    if (c.caps.stick_to_floor && was_grounded && v0 <= 1e-6 && !c.cv->IsSupported())
+        c.cv->StickToFloor(JPH::Vec3(0.0f, -c.caps.step_height, 0.0f), kEveryTree, c.layer_filter, c.body_filter,
+                           kEveryShape, temp);
     const JPH::RVec3 end = c.feet();
     const double moved_y = end.GetY() - start.GetY() - double(carried.GetY()) * dt;
     const auto ground = c.cv->GetGroundState();
