@@ -1359,8 +1359,8 @@ void bind_world(nb::module_ &m) {
         .def(
             "set_flags",
             [](World &w, const Uids &ids, uint32_t bits, bool on, uint64_t at_tick) {
-                if ((bits & ~(flag::kReport | flag::kNoSleep)) != 0)
-                    throw std::invalid_argument("only REPORT and NO_SLEEP change after a body is added");
+                if ((bits & ~(flag::kReport | flag::kNoSleep | flag::kFilterContacts)) != 0)
+                    throw std::invalid_argument("only REPORT, NO_SLEEP and FILTER_CONTACTS change after a body is added");
                 SetFlags set{uids(ids), bits, on};
                 return w.core().submit(Command(std::move(set)), at_tick);
             },

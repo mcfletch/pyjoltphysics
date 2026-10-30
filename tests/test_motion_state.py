@@ -109,6 +109,25 @@ def test_report_flag_turns_persist_records_on_and_off(make_world: MakeWorld) -> 
     assert not np.any(world.drain_events()['phase'] == EventPhase.PERSIST)
 
 
+def test_filter_contacts_flag_set_later_asks_the_filter(make_world: MakeWorld) -> None:
+    world = make_world(tick_hz=60.0, threads=1)
+    asked: list[tuple[int, int]] = []
+
+    def verdict(a: int, b: int, point: object, normal: object, approach: float) -> bool:
+        asked.append((a, b))
+        return False
+
+    world.set_contact_filter(verdict)
+    uids, _ = world.add_bodies(BodyBatch.spheres([(0.0, 1.0, 0.0), (0.0, 0.0, 0.0)], radius=0.5,
+                                                 gravity_factor=0.0))
+    world.set_velocities(uids[:1], linear=(0.0, -2.0, 0.0))
+    world.set_flags(uids, BodyFlag.FILTER_CONTACTS, True)
+    world.run_ticks(30)
+    assert asked
+    position, _ = _state(world, int(uids[0]))
+    assert position[1] < 0.0
+
+
 def test_set_flags_takes_only_report_and_no_sleep(make_world: MakeWorld) -> None:
     world = make_world()
     with pytest.raises(ValueError, match='REPORT'):

@@ -126,7 +126,7 @@ skipped and counted in `stats()['rejected']`.
 | `set_body_filters(uids, filters)` | collision filter indices (below) |
 | `set_drag(uids, drag)` | quadratic drag coefficients, 1/m |
 | `set_motion(uids, mass=None, linear_damping=None, angular_damping=None, gravity_factor=None)` | moving bodies' motion properties; None, or NaN in an array, keeps a value; a new mass scales the inertia with it; changed dynamic bodies wake |
-| `set_flags(uids, flags, on)` | set or clear `BodyFlag.REPORT` and `BodyFlag.NO_SLEEP`, the flags that change after a body is added |
+| `set_flags(uids, flags, on)` | set or clear `BodyFlag.REPORT`, `NO_SLEEP` and `FILTER_CONTACTS`, the flags that change after a body is added |
 | `restore_state(data)` | read a `save_state()` back into the bodies and joints (below) |
 
 Vectors are (n, 3) arrays, or one (3,) vector for every body; quaternions are

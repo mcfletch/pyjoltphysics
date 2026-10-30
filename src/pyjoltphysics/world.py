@@ -970,10 +970,10 @@ class World:
         )
 
     def set_flags(self, uids: npt.ArrayLike, flags: BodyFlag, on: bool, at_tick: int = 0) -> int:
-        """Queue setting (``on``) or clearing ``flags`` on bodies: ``REPORT`` and ``NO_SLEEP`` only."""
+        """Queue setting (``on``) or clearing ``flags`` on bodies: ``REPORT``, ``NO_SLEEP`` and ``FILTER_CONTACTS``."""
         bits = int(flags)
-        if bits & ~int(BodyFlag.REPORT | BodyFlag.NO_SLEEP):
-            raise ValueError('only REPORT and NO_SLEEP change after a body is added')
+        if bits & ~int(BodyFlag.REPORT | BodyFlag.NO_SLEEP | BodyFlag.FILTER_CONTACTS):
+            raise ValueError('only REPORT, NO_SLEEP and FILTER_CONTACTS change after a body is added')
         return self._native.set_flags(_uids(uids), bits, bool(on), at_tick)
 
     def save_state(self) -> bytes:
