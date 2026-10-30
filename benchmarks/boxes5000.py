@@ -1,12 +1,14 @@
 """The 2026-10-26 spike's 5,000-active-box scene on the world thread; one JSON line per run.
 
-usage: python benchmarks/boxes5000.py [--threads N ...] [--frames F] [--ground mesh|box]
+usage: python benchmarks/boxes5000.py [--threads N ...] [--frames F] [--ground mesh|rough|box]
 
 The scene: 1,000 static posts (0.4 x 2 x 0.4 m), 5,000 dynamic 0.5 m boxes of
 1 kg on a grid, and every 20 frames an upward impulse of 3 N s to a quarter
 of them. A frame is 1/60 s: two 120 Hz ticks, run in lockstep with
 ``run_ticks(2)``. The ground is the spike's: a 200 m square mesh of 20,000
-triangles with a 5 cm ripple; ``--ground box`` makes it a static box.
+triangles with a 5 cm ripple, with Jolt's enhanced internal edge removal
+(the default for a static mesh); ``--ground rough`` is the same mesh with
+``BodyFlag.NO_SMOOTH_EDGES`` and ``--ground box`` a static box.
 
 Reported per frame, in milliseconds: ``frame_ms``, the caller's wall time for
 ``run_ticks(2)``; ``ticks_ms``, the world thread's time for the two ticks; and
@@ -23,7 +25,7 @@ import time
 
 import numpy as np
 
-from pyjoltphysics import BodyBatch, MotionType, Shape, World, WorldSettings
+from pyjoltphysics import BodyBatch, BodyFlag, MotionType, Shape, World, WorldSettings
 
 SIZE = 200.0
 BOX = 0.5
@@ -63,9 +65,12 @@ def ripple_mesh(cells: int = 100) -> Shape:
 
 def run(threads: int, frames: int, ground: str = 'mesh') -> dict[str, object]:
     with World(WorldSettings(threads=threads)) as world:
-        if ground == 'mesh':
+        if ground in ('mesh', 'rough'):
+            flags = BodyFlag.NO_SMOOTH_EDGES if ground == 'rough' else BodyFlag.NONE
             world.add_bodies(
-                BodyBatch.of_shape([(0.0, 0.0, 0.0)], ripple_mesh(), motion=MotionType.STATIC)
+                BodyBatch.of_shape(
+                    [(0.0, 0.0, 0.0)], ripple_mesh(), motion=MotionType.STATIC, flags=flags
+                )
             )
         else:
             world.add_bodies(
@@ -121,7 +126,7 @@ def main() -> None:
     parser.add_argument('--threads', type=int, nargs='+', default=[1, 8])
     parser.add_argument('--frames', type=int, default=120)
     parser.add_argument('--repeats', type=int, default=1)
-    parser.add_argument('--ground', choices=('mesh', 'box'), default='mesh')
+    parser.add_argument('--ground', choices=('mesh', 'rough', 'box'), default='mesh')
     args = parser.parse_args()
     for threads in args.threads:
         for _ in range(args.repeats):
