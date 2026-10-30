@@ -188,3 +188,15 @@ def test_material_values_are_checked(make_world: MakeWorld) -> None:
         world.materials.pair(0, 5, friction=0.1)
     with pytest.raises(KeyError):
         world.materials[0]
+
+
+def test_a_pair_entry_is_read_back_in_either_order(make_world: MakeWorld) -> None:
+    world = make_world()
+    wood = world.materials.define(friction=0.5)
+    ice = world.materials.define(friction=0.1)
+    assert world.materials.pairing(wood, ice) is None
+    world.materials.pair(wood, ice, friction=0.2)
+    found = world.materials.pairing(ice, wood)
+    assert found is not None
+    assert found[0] == pytest.approx(0.2) and found[1] == pytest.approx(0.2)
+    assert math.isnan(found[2])

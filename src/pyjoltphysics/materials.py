@@ -70,6 +70,12 @@ class MaterialTable:
             raise KeyError("material 0 is the body's own friction and restitution")
         return self._rows[index]
 
+    def pairing(self, first: int, second: int) -> tuple[float, float, float] | None:
+        """How two materials meet, in either order: (static friction, dynamic friction,
+        restitution), NaN for a value left to the materials; None with no pair entry."""
+        with self._lock:
+            return self._pairs.get((first, second))
+
     def define(
         self,
         friction: float | None = None,
