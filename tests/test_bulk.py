@@ -2,10 +2,17 @@
 
 from __future__ import annotations
 
+import os
+
 import numpy as np
 
 from pyjoltphysics import BodyBatch, MotionType, Shape
 from pyjoltphysics.testing import MakeWorld, floor, grid
+
+
+def slowdown() -> float:
+    """Return 10 under tools/asan.sh, which preloads the sanitizer runtimes, and 1 elsewhere."""
+    return 10.0 if 'libasan' in os.environ.get('LD_PRELOAD', '') else 1.0
 
 
 def posts(count: int) -> np.ndarray:
@@ -27,7 +34,7 @@ def test_ten_thousand_static_posts_apply_within_one_tick(make_world: MakeWorld) 
     stats = world.stats()
     assert stats['bodies'] == 10_501
     # The batch is applied in the tick, under a tick's length at 120 Hz.
-    assert stats['tick_ms'] < 1000.0 / 120.0, stats
+    assert stats['tick_ms'] < slowdown() * 1000.0 / 120.0, stats
 
 
 def test_the_broad_phase_is_rebuilt_once_after_a_large_static_add(make_world: MakeWorld) -> None:
