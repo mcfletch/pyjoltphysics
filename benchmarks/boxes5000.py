@@ -1,12 +1,12 @@
 """The 2026-10-26 spike's 5,000-active-box scene on the world thread; one JSON line per run.
 
-usage: python benchmarks/boxes5000.py [--threads N ...] [--frames F]
+usage: python benchmarks/boxes5000.py [--threads N ...] [--frames F] [--ground mesh|box]
 
 The scene: 1,000 static posts (0.4 x 2 x 0.4 m), 5,000 dynamic 0.5 m boxes of
 1 kg on a grid, and every 20 frames an upward impulse of 3 N s to a quarter
 of them. A frame is 1/60 s: two 120 Hz ticks, run in lockstep with
-``run_ticks(2)``. The ground is a static 200 m box with its top at y = 0,
-where the spike used a 20,000-triangle mesh with a 5 cm ripple.
+``run_ticks(2)``. The ground is the spike's: a 200 m square mesh of 20,000
+triangles with a 5 cm ripple; ``--ground box`` makes it a static box.
 
 Reported per frame, in milliseconds: ``frame_ms``, the caller's wall time for
 ``run_ticks(2)``; ``ticks_ms``, the world thread's time for the two ticks; and
@@ -23,7 +23,7 @@ import time
 
 import numpy as np
 
-from pyjoltphysics import BodyBatch, MotionType, World, WorldSettings
+from pyjoltphysics import BodyBatch, MotionType, Shape, World, WorldSettings
 
 SIZE = 200.0
 BOX = 0.5
@@ -43,15 +43,36 @@ def dynamic_grid(count: int) -> np.ndarray:
     pitch = min(3.0, SIZE * 0.8 / side)
     i = np.arange(count)
     return np.stack(
-        [(i % side - side / 2) * pitch, 1.0 + 0.5 * (i % 3), (i // side - side / 2) * pitch], axis=1
+        [(i % side - side / 2) * pitch, 1.1 + 0.5 * (i % 3), (i // side - side / 2) * pitch], axis=1
     )
 
 
-def run(threads: int, frames: int) -> dict[str, object]:
+def ripple_mesh(cells: int = 100) -> Shape:
+    """Return the spike's ground: ``2 * cells**2`` triangles over SIZE m with a 5 cm ripple."""
+    edge = np.linspace(-SIZE / 2, SIZE / 2, cells + 1)
+    x, z = np.meshgrid(edge, edge, indexing='xy')
+    y = 0.05 * np.sin(x * 0.7) * np.cos(z * 0.6)
+    points = np.stack([x.ravel(), y.ravel(), z.ravel()], axis=1)
+    k = cells + 1
+    a = (np.arange(cells)[:, None] * k + np.arange(cells)[None, :]).ravel()
+    triangles = np.concatenate(
+        [np.stack([a, a + k, a + 1], axis=1), np.stack([a + 1, a + k, a + k + 1], axis=1)]
+    )
+    return Shape.mesh(points, triangles)
+
+
+def run(threads: int, frames: int, ground: str = 'mesh') -> dict[str, object]:
     with World(WorldSettings(threads=threads)) as world:
-        world.add_bodies(
-            BodyBatch.boxes([(0.0, -0.5, 0.0)], size=(SIZE, 1.0, SIZE), motion=MotionType.STATIC)
-        )
+        if ground == 'mesh':
+            world.add_bodies(
+                BodyBatch.of_shape([(0.0, 0.0, 0.0)], ripple_mesh(), motion=MotionType.STATIC)
+            )
+        else:
+            world.add_bodies(
+                BodyBatch.boxes(
+                    [(0.0, -0.5, 0.0)], size=(SIZE, 1.0, SIZE), motion=MotionType.STATIC
+                )
+            )
         world.add_bodies(BodyBatch.boxes(posts(1000), size=POST, motion=MotionType.STATIC))
         uids, _ = world.add_bodies(BodyBatch.boxes(dynamic_grid(5000), size=(BOX, BOX, BOX)))
 
@@ -78,6 +99,7 @@ def run(threads: int, frames: int) -> dict[str, object]:
         wall = np.array(walls) * 1e3
         return {
             'case': 'boxes5000_p1000_active',
+            'ground': ground,
             'threads': threads,
             'python': sys.version.split()[0],
             'free_threaded': not getattr(sys, '_is_gil_enabled', lambda: True)(),
@@ -99,10 +121,11 @@ def main() -> None:
     parser.add_argument('--threads', type=int, nargs='+', default=[1, 8])
     parser.add_argument('--frames', type=int, default=120)
     parser.add_argument('--repeats', type=int, default=1)
+    parser.add_argument('--ground', choices=('mesh', 'box'), default='mesh')
     args = parser.parse_args()
     for threads in args.threads:
         for _ in range(args.repeats):
-            print(json.dumps(run(threads, args.frames)), flush=True)
+            print(json.dumps(run(threads, args.frames, args.ground)), flush=True)
 
 
 if __name__ == '__main__':

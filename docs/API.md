@@ -41,10 +41,18 @@ The thread either free-runs or runs in lockstep:
 | `stop()` | stop and join the thread; idempotent; from a callback, the thread ends after the current tick |
 | `with World(...) as world:` | `stop()` at the end of the block |
 
-A free-running world with no pending batch, no awake body and no step
-callback (`before_step`, `after_step` or a pending `at_tick`) waits on a
-condition variable: it runs no ticks and uses no CPU, and its tick count and
-simulation time stand still. A command wakes it at once. A free-running world
+A free-running world with no pending batch, no awake body, no step callback
+(`before_step` or `after_step`) and no `at_tick` due at its current tick
+waits on a condition variable: it runs no ticks and uses no CPU, and its tick
+count and simulation time stand still. A command wakes it at once. An
+`at_tick` for a later tick does not keep it ticking: the callable runs when
+other work, or `run_ticks`, brings the world to its tick.
+
+After a tick that adds 256 or more static bodies, the world thread rebuilds
+the broad phase's trees (`PhysicsSystem::OptimizeBroadPhase`) once, the next
+time it has no tick due: before waiting in lockstep, or in the time before
+the next scheduled tick when free-running. `stats()['broadphase_optimizations']`
+counts the rebuilds. A free-running world
 that falls more than `max_catch_up` seconds behind its schedule drops the
 ticks it is behind by (`stats()['dropped_ticks']`), so simulated time slows.
 
@@ -87,7 +95,7 @@ A frozen dataclass; every field has a default.
 | `lockstep` | True unless `start()` is free-running the world |
 | `error` | the exception a callback raised, or None |
 | `submitted_seq` | the sequence number of the last batch submitted |
-| `stats()` | counters (`ticks`, `dropped_ticks`, `events_dropped`, `rejected`, `pool`, `bodies`, `idle`, `running`) and mean milliseconds a tick since `reset_stats()` (`apply_ms`, `step_ms`, `events_ms`, `publish_ms`, `callbacks_ms`, `tick_ms`) |
+| `stats()` | counters (`ticks`, `dropped_ticks`, `events_dropped`, `rejected`, `pool`, `bodies` in the world, `queued_bodies` submitted and not yet applied, `shapes` registered, `broadphase_optimizations`, `idle`, `running`) and mean milliseconds a tick since `reset_stats()` (`apply_ms`, `step_ms`, `events_ms`, `publish_ms`, `callbacks_ms`, `tick_ms`) |
 
 ## Commands
 
@@ -135,7 +143,11 @@ an array with one entry (or row) per body.
 | Field | Default | Meaning |
 |---|---|---|
 | `positions` | | (n, 3) body origins; fixes the batch's length |
-| `shape_kind`, `shape_params` | box, (1, 1, 1, 0) | a `ShapeKind` and its four parameters |
+| `shape` | None | a `Shape` or shape id for the batch, or a sequence of them per body; None takes `shape_kind` |
+| `shape_kind`, `shape_params` | box, (1, 1, 1, 0) | a primitive `ShapeKind` and its four parameters |
+| `scale` | (1, 1, 1) | scales the shape in its own frame |
+| `shape_offset`, `shape_rotation` | (0, 0, 0), identity | place the scaled shape in the body's frame, m and a quaternion |
+| `center_of_mass` | (0, 0, 0) | moves the centre of mass from where the shape puts it, m |
 | `motion` | `DYNAMIC` | `MotionType` |
 | `orientations` | identity | (n, 4) unit quaternions |
 | `mass` | 1.0 | kg; 0 takes the mass from `density` |
@@ -149,8 +161,26 @@ an array with one entry (or row) per body.
 
 Builders, each returning a batch, with every other field as a keyword:
 `BodyBatch.boxes(positions, size=(x, y, z))`, `spheres(positions, radius)`,
-`capsules(positions, radius, height)`, `cylinders(positions, radius, height)`
-and `plane(position=(0, 0, 0), half_extent=0.0)`.
+`capsules(positions, radius, height)`, `cylinders(positions, radius, height)`,
+`plane(position=(0, 0, 0), half_extent=0.0)`, `of_shape(positions, shape)`,
+`hulls(positions, points)` with `points` (m, 3) for every body or (n, m, 3)
+one cloud per body, `meshes(positions, points, triangles)` (static by
+default) and `heightfield(heights, origin, spacing, ...)`, one static body at
+`origin`. `heightfield_tiles(heights, origin, spacing, tile=64)` returns one
+static body a tile.
+
+A batch is checked when it is submitted: a bad shape, a shape id that names
+nothing, a scale the shape cannot take (a sphere and a capsule take a uniform
+scale, a cylinder the same scale in x and z), and a dynamic body of a mesh or
+height field raise `ValueError` naming the row. Shapes are resolved then too,
+so the world thread only creates the bodies.
+
+`add_bodies` adds a batch with Jolt's `AddBodiesPrepare` and
+`AddBodiesFinalize`, in the tick that applies it. Measured on this machine
+(benchmarks/statics.py), 10,000 static posts of one shared shape are created
+and added in 3.5 to 4.6 ms of that tick (4.2 to 5.8 ms for the whole tick,
+under the 8.3 ms of a 120 Hz tick), and `add_bodies` itself costs the
+caller 3.7 to 4.5 ms.
 
 ### Shapes
 
@@ -163,10 +193,92 @@ and `plane(position=(0, 0, 0), half_extent=0.0)`.
 | `CAPSULE` | radius, height of the cylinder between the hemisphere centres | along the body's Y axis |
 | `CYLINDER` | radius, total height | along the body's Y axis |
 | `PLANE` | half extent of its bounds, 0 for 1 km | through the body's origin, normal the body's +Y; static only |
+| `CONVEX` | a `Shape` | the hull of a point cloud |
+| `MESH` | a `Shape` | static and kinematic bodies only |
+| `HEIGHTFIELD` | a `Shape` | static and kinematic bodies only |
+| `COMPOUND` | a `Shape` | children of any kind but a height field |
 
-Equal kinds and parameters share one Jolt shape. Boxes and cylinders are
-rounded by a convex radius of 5 cm or half the smallest dimension, whichever
-is smaller.
+Equal primitive kinds and parameters share one Jolt shape. Boxes and
+cylinders are rounded by a convex radius of 5 cm or half the smallest
+dimension, whichever is smaller.
+
+#### `Shape` and shape ids
+
+```python
+post = world.add_shape(pj.Shape.box((0.4, 2.0, 0.4)))        # an int
+world.add_bodies(pj.BodyBatch.of_shape(positions, post, motion=pj.MotionType.STATIC))
+rock = pj.Shape.convex(points)                              # built by the first add_bodies naming it
+world.add_bodies(pj.BodyBatch.of_shape(more_positions, rock, mass=0.0, density=2600.0))
+```
+
+A `Shape` describes a shape; `World.add_shape(shape)` builds it on the
+calling thread, with the GIL released, and returns the world's id for it.
+Every body naming the id shares the one Jolt shape, so 10,000 posts hold one.
+The same `Shape` object returns the same id every time, and a batch naming a
+`Shape` registers it through `add_shape`. `remove_shape(id)` forgets the id;
+bodies made with it keep the shape. `shape_info(id)` returns a `ShapeInfo`:
+`kind`, `volume` (m3, 0 for a mesh, height field or plane), `center_of_mass`,
+`bounds_min` and `bounds_max` in the shape's frame, and `dynamic`.
+
+| Constructor | Builds |
+|---|---|
+| `Shape.box(size)`, `sphere(radius)`, `capsule(radius, height)`, `cylinder(radius, height)` | a primitive, as a shape a compound or `of_shape` can name |
+| `Shape.convex(points, max_convex_radius=0.05, hull_tolerance=1e-3)` | Jolt's `ConvexHullShape` of (m, 3) points: edges rounded by up to `max_convex_radius` (less for a small hull), points allowed `hull_tolerance` m outside. Fewer than 4 points, or points on a plane, a line or one point, raise `ValueError` |
+| `Shape.mesh(points, triangles)` | Jolt's `MeshShape` of (m, 3) vertices and (t, 3) indices. Degenerate and repeated triangles are dropped; an index past the vertices raises `ValueError`. Edges between faces meeting at under 5 degrees are inactive (Jolt's active edges). A triangle collides on its front face, from which its vertices run anticlockwise; a wall met from both sides lists each triangle in both windings |
+| `Shape.heightfield(heights, origin, spacing, holes=None, block_size=4, bits_per_sample=8, height_range=None)` | Jolt's `HeightFieldShape`, below |
+| `Shape.compound(parts, mutable=False)` | Jolt's `StaticCompoundShape`, or with `mutable` its `MutableCompoundShape` (quicker to build, slower to collide). Each part is `(shape, position)` or `(shape, position, orientation)`, the shape a `Shape` or an id |
+
+Jolt computes no mass properties for a mesh, a height field or a plane, so
+it gives them no dynamic body: such a batch row raises `ValueError`, as does
+a compound holding one. A kinematic body of one takes `mass` (1 kg when 0) as
+a unit box's mass and inertia; a kinematic body meets no solver, so they do
+not move it.
+
+A dynamic body's mass is `mass`, or `density` times the shape's volume where
+`mass` is 0, for every dynamic kind; its inertia comes from the shape, scaled
+to that mass.
+
+#### Height fields
+
+`heights[j, i]` is the height at `x = origin[0] + i * spacing[0]` and `z =
+origin[2] + j * spacing[1]`, added to `origin[1]`, in the body's frame;
+`spacing` is one number or `(dx, dz)`. Jolt takes a square grid whose side is
+a multiple of `block_size` and at least two blocks; any other grid is padded on
+its +x and +z sides with samples that collide with nothing, so the padding
+adds memory (one byte a sample at 8 bits) and no surface.
+`heightfield_side(rows, columns, block_size)` gives the side. A NaN height,
+or a true entry of `holes` (a bool array of the grid's shape), is a hole: the
+cells touching that sample collide with nothing. Jolt stores each block of
+`block_size` by `block_size` samples in `bits_per_sample` bits (1 to 16)
+relative to the block's lowest and highest sample: 8 bits keep a sample within
+1/255 of its block's range. `height_range=(low, high)` widens the range Jolt
+quantises over, for edits that will reach past the samples.
+
+`heightfield_tiles(heights, origin, spacing, tile=64, holes=None, **values)`
+cuts a large grid into one static body a tile of `tile` by `tile` cells.
+Neighbouring tiles share their common edge's samples, so their triangles meet
+exactly and a body crossing a seam meets the same surface as on one field
+(tests/test_shapes.py rolls a ball across seams and compares). Each body sits
+at its tile's corner, so a tile's local coordinates stay small anywhere in a
+kilometre-scale world.
+
+A body rolling quickly over a mesh rides up to about 5 mm off it at triangle
+edges, and one landing beside an inner edge of a mesh can be pushed sideways:
+Jolt tests each triangle apart from its neighbours. `BodyFlag.SMOOTH_EDGES`
+on the moving body turns on Jolt's enhanced internal edge removal, which
+merges those contacts with the faces beside them, at some cost a contact; it
+works within one body, so it does not reach across the seam between two tile
+bodies.
+
+#### Decorations
+
+A body's `scale`, `shape_offset`, `shape_rotation` and `center_of_mass`
+decorate its shape with Jolt's `ScaledShape`, `RotatedTranslatedShape` and
+`OffsetCenterOfMassShape`, in that order: the shape is scaled, then placed in
+the body's frame, then its centre of mass moved. Bodies with the same shape
+and decoration share one decorated shape. The body's origin stays where
+`positions` puts it; a snapshot's `position` is the origin, not the centre of
+mass.
 
 ### `BodyFlag`
 
@@ -177,6 +289,7 @@ is smaller.
 | `CONTINUOUS` | continuous collision detection (Jolt's linear cast), for small fast bodies |
 | `REPORT` | persist events, once a tick, for every pair the body touches |
 | `MOVABLE` | a static body a later `set_motion_types` may make kinematic or dynamic; needs a mass or density |
+| `SMOOTH_EDGES` | Jolt's enhanced internal edge removal: contacts with the inner edges of a mesh, height field or compound merge with the faces beside them |
 
 ## Snapshots
 
@@ -209,7 +322,7 @@ asleep is in `changed` on that tick, with its final pose.
 
 ## Events
 
-`EVENT_DTYPE` is a 48-byte record:
+`EVENT_DTYPE` is a 64-byte record:
 
 | Field | Type | Meaning |
 |---|---|---|
@@ -218,17 +331,22 @@ asleep is in `changed` on that tick, with its final pose.
 | `reason` | uint16 | `EndReason` of an end: `NONE`, or `REMOVED` when a body of the pair was removed |
 | `tick` | uint32 | the tick the event happened in: the tick of the first snapshot that shows it |
 | `a`, `b` | uint32 | uids: for a contact the lower uid first; for a trigger the sensor first; for sleep and wake the body, and 0 |
-| `point` | 3 float32 | world contact point, m (begin and persist) |
+| `point` | 3 float64 | world contact point, m (begin and persist) |
 | `normal` | 3 float32 | unit vector from `a` to `b` (contact begin and persist) |
 | `approach` | float32 | closing speed along the normal at the point, m/s, positive when approaching |
-| `impulse` | float32 | estimated normal impulse, N s, contact begin only |
+| `impulse` | float32 | estimated normal impulse, N s, in contact begin records; 0 in every other record |
+| `reserved` | uint32 | 0 |
 
 A record's simulation time is `tick / tick_hz`; `event_times(events, tick_hz)`
 computes it. The impulse is Jolt's `EstimateCollisionResponse` for the two
-bodies alone, since the solver has not run when contacts are reported.
+bodies alone. Jolt calls its contact listeners before its solver runs, so no
+record carries the impulse the solver applied, and a persist record's
+impulse is 0. The point is float64, as body positions are, so it keeps the
+same precision at any distance from the origin.
 
 The world folds Jolt's per-sub-shape reports into one record per body pair:
-one begin when the pair first touches and one end when it parts. Persist
+one begin when the pair first touches and one end when it parts, however
+many children of a compound or triangles of a mesh touch. Persist
 records come once a tick for pairs where either body has `BodyFlag.REPORT`.
 A sensor's begin and end are a body entering and leaving it.
 
@@ -238,6 +356,19 @@ awake as touching: no end is recorded when it falls asleep and no begin when
 it wakes still touching. A body that wakes and moves away ends its pairs in
 the tick their contacts fail to return. A body asleep inside a sensor stays
 inside it.
+
+Sensors. Jolt tests a pair only where one of its bodies is awake, so on its
+own a static sensor added over a sleeping body would not see it. Adding a
+sensor, or moving one with `set_transforms`, wakes the moving bodies whose
+bounds meet the sensor's (one broad-phase query); the next step reports
+those inside, and those at rest fall asleep again and are held as inside. A
+kinematic sensor also meets static and kinematic bodies (Jolt's
+`mCollideKinematicVsNonDynamic`). Two static bodies never meet, so a static
+sensor does not report a static body.
+
+Continuous detection. A body with `BodyFlag.CONTINUOUS` is cast along its
+motion each step and stops at the first surface it would pass, a thin box
+or a mesh triangle (tests/test_events.py, a 5 cm ball at 400 m/s).
 
 Each tick's records are sorted, so a run makes the same records in the same
 order with any number of job threads.

@@ -21,11 +21,13 @@ arrays and publishes each tick's poses as read-only NumPy views.
 A `World` steps on its own thread at `tick_hz` (120 by default) or in lockstep
 with `run_ticks(n)`. Commands are batches of arrays applied at the start of
 the next tick; each tick publishes a snapshot of every body's pose and
-velocity into a pool of reference-counted buffers, and appends one 48-byte
+velocity into a pool of reference-counted buffers, and appends one 64-byte
 record per contact begin, end and (on request) persist to an event ring.
 Callbacks run on the world thread only when registered. Shapes are boxes,
-spheres, capsules, cylinders and static planes. `docs/API.md` describes every
-call.
+spheres, capsules, cylinders, static planes, convex hulls, triangle meshes,
+height fields (and landscapes of height field tiles) and compounds, each
+built once and shared by every body naming its id, with scale, offset and
+centre of mass as body parameters. `docs/API.md` describes every call.
 
 The build information:
 
@@ -120,10 +122,15 @@ pytest
 tox                 # lint, typecheck, stubs and the suite per interpreter
 tox -e asan         # the suite against an AddressSanitizer and UBSan build (Linux, gcc)
 python benchmarks/boxes5000.py --threads 1 8
+python benchmarks/statics.py --threads 1 8
 ```
 
-`tests/test_differential.py` compares three scenes with `omi_physics` where it
-is installed, and is skipped elsewhere.
+`tests/differential/` runs each scene through Jolt and through `omi_physics`
+and compares them within the tolerance each test states: shapes resting on
+box, mesh and height field grounds, slides by friction, bounces, stacks, a
+pyramid, stairs, triggers, continuous detection, a bin of 1,000 boxes and a
+compound. It is marked `differential` and skipped where `omi_physics` is not
+installed.
 
 ## Licence
 
