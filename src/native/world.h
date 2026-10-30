@@ -95,6 +95,39 @@ struct WorldStats {
     double query_wait_ms = 0, query_wait_max_ms = 0;
 };
 
+// The world lock: a shared mutex that admits no new reader while the world
+// thread waits for it. std::shared_mutex prefers readers on glibc, so queries
+// from several threads in a row would hold the world thread off its tick
+// indefinitely; here a query arriving while the world thread waits queues
+// behind it.
+class WorldLock {
+public:
+    void lock() {
+        writer_waiting_.store(true);
+        mutex_.lock();
+        {
+            std::lock_guard<std::mutex> guard(gate_);
+            writer_waiting_.store(false);
+        }
+        open_.notify_all();
+    }
+    void unlock() { mutex_.unlock(); }
+    void lock_shared() {
+        if (writer_waiting_.load()) {
+            std::unique_lock<std::mutex> guard(gate_);
+            open_.wait(guard, [this] { return !writer_waiting_.load(); });
+        }
+        mutex_.lock_shared();
+    }
+    void unlock_shared() { mutex_.unlock_shared(); }
+
+private:
+    std::shared_mutex mutex_;
+    std::atomic<bool> writer_waiting_{false};
+    std::mutex gate_;
+    std::condition_variable open_;
+};
+
 class WorldCore : public std::enable_shared_from_this<WorldCore> {
 public:
     explicit WorldCore(const WorldSettings &settings);
@@ -251,7 +284,7 @@ private:
     nb::object error_;
     std::atomic<bool> failed_{false};
 
-    std::shared_mutex world_lock_;
+    WorldLock world_lock_;
     // The shared side of the world lock for a query; nothing on the world thread,
     // whose tick already holds it.
     class QueryLock {
@@ -259,7 +292,7 @@ private:
         explicit QueryLock(WorldCore &world);
 
     private:
-        std::shared_lock<std::shared_mutex> lock_;
+        std::shared_lock<WorldLock> lock_;
     };
     std::atomic<uint64_t> queries_{0};
     std::atomic<uint64_t> query_wait_ns_{0};

@@ -247,7 +247,7 @@ void WorldCore::optimize_if_due() {
     if (statics_since_optimize_ < kOptimizeAfterStatics)
         return;
     statics_since_optimize_ = 0;
-    std::unique_lock<std::shared_mutex> exclusive(world_lock_);
+    std::unique_lock<WorldLock> exclusive(world_lock_);
     system_.OptimizeBroadPhase();
     ++optimizations_;
 }
@@ -459,7 +459,7 @@ bool WorldCore::run_python_after(uint64_t tick) {
 bool WorldCore::tick_once() {
     const auto t0 = Clock::now();
     const uint64_t index = tick_.load();
-    std::unique_lock<std::shared_mutex> exclusive(world_lock_);
+    std::unique_lock<WorldLock> exclusive(world_lock_);
     due_.clear();
     queue_.take_due(index, due_);
     for (Batch &batch : due_) {
@@ -478,7 +478,7 @@ bool WorldCore::tick_once() {
     const auto t1 = Clock::now();
     double python_s = 0.0;
     {
-        std::shared_lock<std::shared_mutex> shared(world_lock_);
+        std::shared_lock<WorldLock> shared(world_lock_);
         const auto c0 = Clock::now();
         const bool ok = run_python_before(index);
         python_s += seconds(Clock::now() - c0);
@@ -493,7 +493,7 @@ bool WorldCore::tick_once() {
     const auto t3 = Clock::now();
     exclusive.unlock();
 
-    std::shared_lock<std::shared_mutex> shared(world_lock_);
+    std::shared_lock<WorldLock> shared(world_lock_);
     const uint64_t tick = index + 1;
     time_ = double(tick) * dt_;
     collector_.take(raw_contacts_, raw_activations_);

@@ -219,7 +219,8 @@ def test_queries_from_many_threads_beside_a_free_running_world(make_world: MakeW
     world.stop()
     assert not errors, errors[0]
     assert min(counts) > 3
-    assert world.tick > 20
+    # At 240 Hz for half a second: the queries hold the world thread off no tick.
+    assert world.tick > 90
 
 
 def test_a_query_inside_a_world_callback_runs_without_the_lock(make_world: MakeWorld) -> None:
