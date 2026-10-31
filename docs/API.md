@@ -986,8 +986,10 @@ world.add_bodies(pj.BodyBatch.boxes(positions, material=wood))
 ```
 
 `World.materials` is the world's `MaterialTable`; `define` returns a material
-index, `pair` sets how two materials meet and `pairing` reads it back (static
-and dynamic friction and restitution, NaN for a value left to the materials). Each change is sent as a batch.
+index, `redefine(indices, ...)` gives one or more defined materials new values
+(their bodies meet with them from the next tick, and pair entries stay), `pair` sets how
+two materials meet and `pairing` reads it back (static and dynamic friction
+and restitution, NaN for a value left to the materials). Each change is sent as a batch.
 Index 0 is a body's own `friction` and `restitution`, combined as Jolt
 combines them (the geometric mean of the frictions, the larger restitution).
 Where either side of a contact has another material, the two rows combine by

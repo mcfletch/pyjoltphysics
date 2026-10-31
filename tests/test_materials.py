@@ -200,3 +200,41 @@ def test_a_pair_entry_is_read_back_in_either_order(make_world: MakeWorld) -> Non
     assert found is not None
     assert found[0] == pytest.approx(0.2) and found[1] == pytest.approx(0.2)
     assert math.isnan(found[2])
+
+
+def test_a_material_redefined_mid_run_changes_how_its_bodies_meet(make_world: MakeWorld) -> None:
+    world = make_world(threads=1, tick_hz=240.0)
+    slick = world.materials.define(friction=0.0)
+    world.add_bodies(BodyBatch.plane(material=slick))
+    uids, _ = world.add_bodies(
+        BodyBatch.boxes(
+            [(0.0, 0.25, 0.0)],
+            size=(0.5, 0.5, 0.5),
+            material=slick,
+            linear_velocity=(2.0, 0.0, 0.0),
+        )
+    )
+    world.run_ticks(120)
+    snap = latest(world)
+    assert float(snap.linear_velocity[snap.rows[int(uids[0])], 0]) == pytest.approx(2.0, abs=0.02)
+    world.materials.redefine([slick], friction=1.0)
+    assert world.materials[slick].dynamic_friction == 1.0
+    world.run_ticks(240)
+    snap = latest(world)
+    assert abs(float(snap.linear_velocity[snap.rows[int(uids[0])], 0])) < 0.01
+
+
+def test_only_a_defined_material_is_redefined(make_world: MakeWorld) -> None:
+    world = make_world(threads=1)
+    world.materials.define(friction=0.5)
+    with pytest.raises(IndexError):
+        world.materials.redefine(0, friction=0.1)
+    with pytest.raises(IndexError):
+        world.materials.redefine(2, friction=0.1)
+    with pytest.raises(IndexError):
+        world.materials.redefine([1, 2], friction=0.1)
+    assert world.materials[1].dynamic_friction == 0.5
+    with pytest.raises(ValueError):
+        world.materials.redefine(1, friction=-1.0)
+    world.materials.redefine(1, restitution=0.5)
+    assert world.materials[1].restitution == 0.5

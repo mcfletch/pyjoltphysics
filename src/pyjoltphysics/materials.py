@@ -24,7 +24,7 @@ from __future__ import annotations
 import dataclasses
 import math
 import threading
-from collections.abc import Callable
+from collections.abc import Callable, Iterable
 
 import numpy as np
 
@@ -48,6 +48,25 @@ class Material:
             value = float(getattr(self, name))
             if not (math.isfinite(value) and value >= 0.0):
                 raise ValueError('%s is finite and not negative, not %r' % (name, value))
+
+
+def _material(
+    friction: float | None,
+    restitution: float,
+    static_friction: float | None,
+    dynamic_friction: float | None,
+    friction_combine: Combine,
+    restitution_combine: Combine,
+) -> Material:
+    """A row of the table from :meth:`MaterialTable.define`'s arguments."""
+    default = 0.6 if friction is None else float(friction)
+    return Material(
+        default if static_friction is None else float(static_friction),
+        default if dynamic_friction is None else float(dynamic_friction),
+        float(restitution),
+        Combine(friction_combine),
+        Combine(restitution_combine),
+    )
 
 
 class MaterialTable:
@@ -91,13 +110,13 @@ class MaterialTable:
         ``friction`` sets both coefficients; ``static_friction`` and
         ``dynamic_friction`` set one each (both default to 0.6).
         """
-        default = 0.6 if friction is None else float(friction)
-        material = Material(
-            default if static_friction is None else float(static_friction),
-            default if dynamic_friction is None else float(dynamic_friction),
-            float(restitution),
-            Combine(friction_combine),
-            Combine(restitution_combine),
+        material = _material(
+            friction,
+            restitution,
+            static_friction,
+            dynamic_friction,
+            friction_combine,
+            restitution_combine,
         )
         with self._lock:
             if len(self._rows) >= 0xFFFF:
@@ -106,6 +125,39 @@ class MaterialTable:
             index = len(self._rows) - 1
         self._send(self)
         return index
+
+    def redefine(
+        self,
+        indices: int | Iterable[int],
+        friction: float | None = None,
+        restitution: float = 0.0,
+        *,
+        static_friction: float | None = None,
+        dynamic_friction: float | None = None,
+        friction_combine: Combine = Combine.AVERAGE,
+        restitution_combine: Combine = Combine.AVERAGE,
+    ) -> None:
+        """Give each material of ``indices`` (one index or several) the values :meth:`define` takes.
+
+        Every body and mesh triangle naming one meets with the new values
+        from the next tick; pair entries stay. The table is sent once.
+        """
+        material = _material(
+            friction,
+            restitution,
+            static_friction,
+            dynamic_friction,
+            friction_combine,
+            restitution_combine,
+        )
+        rows = [int(indices)] if isinstance(indices, int) else [int(index) for index in indices]
+        with self._lock:
+            for index in rows:
+                if not 0 < index < len(self._rows):
+                    raise IndexError('material %d is not a defined material' % (index,))
+            for index in rows:
+                self._rows[index] = material
+        self._send(self)
 
     def pair(
         self,

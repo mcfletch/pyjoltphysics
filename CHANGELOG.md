@@ -26,6 +26,7 @@
 - `pyjoltphysics.testing.character_digest`.
 - Joints: `Joint` builders `fixed`, `ball`, `hinge`, `slider`, `distance`, `six_dof`, `universal`, `two_axis_hinge`, `motor`; `Motor`, `MotorMode`, `JointKind`, `JointState`; `World.add_joint`, `add_joints`, `remove_joints`, `set_joint_motors`, `set_joints_enabled`; `Snapshot.joints` (`JointRows`); break limits with `EventKind.JOINT` and `EventPhase.BREAK`; jointed bodies do not collide unless `collide`.
 - Materials: `World.materials` (`MaterialTable`, `Material`, `Combine`), pair entries, static and dynamic friction by `WorldSettings.static_friction_speed`; `BodyBatch.material`, `World.set_body_materials`; `Shape.mesh(materials=)` per triangle.
+- `MaterialTable.redefine`: new values for a defined material, from the next tick.
 - The event record's last word is `material_a` and `material_b`.
 - Collision filters: `BodyBatch.filter`, `World.set_filter_table`, `set_body_filters`.
 - The contact filter: `World.set_contact_filter`, asked for pairs with `BodyFlag.FILTER_CONTACTS`.
