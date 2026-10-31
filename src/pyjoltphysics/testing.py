@@ -123,3 +123,34 @@ def vehicle_digest(snapshot: Snapshot, digest: D) -> D:
     ):
         out.update(np.ascontiguousarray(array).tobytes())
     return out
+
+
+def ragdoll_digest(snapshot: Snapshot, digest: D) -> D:
+    """Return ``digest`` updated with every ragdoll's mode, strength and bone poses.
+
+    The body poses go in too, by :func:`pose_digest`.
+    """
+    out = pose_digest(snapshot, digest)
+    rows = snapshot.ragdolls
+    for array in (
+        rows.id,
+        rows.mode,
+        rows.strength,
+        rows.bone_uid,
+        rows.bone_position,
+        rows.bone_orientation,
+    ):
+        out.update(np.ascontiguousarray(array).tobytes())
+    return out
+
+
+def soft_digest(snapshot: Snapshot, digest: D) -> D:
+    """Return ``digest`` updated with every soft body's origin, version and vertices.
+
+    The body poses go in too, by :func:`pose_digest`.
+    """
+    out = pose_digest(snapshot, digest)
+    rows = snapshot.soft_bodies
+    for array in (rows.uid, rows.version, rows.origin, rows.positions, rows.normals):
+        out.update(np.ascontiguousarray(array).tobytes())
+    return out
