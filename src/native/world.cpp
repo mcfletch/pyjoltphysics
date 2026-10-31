@@ -15,6 +15,7 @@
 #include <algorithm>
 #include <cmath>
 #include <cstring>
+#include <unordered_set>
 
 namespace pj {
 
@@ -67,12 +68,23 @@ WorldCore::WorldCore(const WorldSettings &settings)
     row_of_index_.assign(settings.max_bodies, kNoRow);
     characters_ = std::make_unique<CharacterSystem>(system_, layers_, settings.threads);
     vehicles_ = std::make_unique<VehicleSystem>(system_, dt_);
+    ragdolls_ = std::make_unique<RagdollSystem>(system_);
+    soft_ = std::make_unique<SoftBodySystem>(system_);
 }
 
 WorldCore::~WorldCore() {
     if (thread_.joinable())
         thread_.detach();
     vehicles_->remove_all();
+    // The ragdolls destroy their own bodies.
+    std::unordered_set<Uid> bones;
+    for (RagdollId id : ragdolls_->ids()) {
+        std::vector<JPH::BodyID> ids;
+        std::vector<Uid> uids;
+        std::vector<std::pair<int, int>> pairs;
+        ragdolls_->remove(id, ids, uids, pairs);
+        bones.insert(uids.begin(), uids.end());
+    }
     for (Joint &joint : joints_)
         if (joint.constraint != nullptr && joint.state != JointState::Broken)
             system_.RemoveConstraint(joint.constraint);
@@ -82,7 +94,8 @@ WorldCore::~WorldCore() {
         std::vector<JPH::BodyID> ids = characters_->remove_all();
         ids.reserve(ids.size() + rows_.size());
         for (const Row &row : rows_)
-            ids.push_back(row.id);
+            if (bones.count(row.uid) == 0)
+                ids.push_back(row.id);
         if (!ids.empty()) {
             bodies.RemoveBodies(ids.data(), int(ids.size()));
             bodies.DestroyBodies(ids.data(), int(ids.size()));
@@ -93,7 +106,7 @@ WorldCore::~WorldCore() {
 // -- commands ------------------------------------------------------------------
 
 uint64_t WorldCore::submit(Command &&command, uint64_t at_tick, Uid *first_uid, JointId *first_joint,
-                          VehicleId *vehicle) {
+                          VehicleId *vehicle, RagdollId *ragdoll) {
     check();
     const uint32_t uid_count = uids_wanted(command);
     if (uid_count) {
@@ -107,7 +120,7 @@ uint64_t WorldCore::submit(Command &&command, uint64_t at_tick, Uid *first_uid, 
     Batch batch;
     batch.at_tick = at_tick;
     batch.command = std::move(command);
-    const uint64_t seq = queue_.push(std::move(batch), uid_count, first_uid, first_joint, vehicle);
+    const uint64_t seq = queue_.push(std::move(batch), uid_count, first_uid, first_joint, vehicle, ragdoll);
     std::lock_guard<std::mutex> guard(control_);
     wake_.notify_all();
     return seq;
@@ -231,7 +244,9 @@ void WorldCore::run_ticks(uint64_t count) {
 
 bool WorldCore::settled() const {
     return !callbacks_.any_step() && characters_->empty() && vehicles_->empty() && tracks_.empty() && driven_.empty() &&
-           fields_.torques.empty() && system_.GetNumActiveBodies(JPH::EBodyType::RigidBody) == 0;
+           fields_.torques.empty() && !ragdolls_->driving() && !soft_->driving() &&
+           system_.GetNumActiveBodies(JPH::EBodyType::RigidBody) == 0 &&
+           system_.GetNumActiveBodies(JPH::EBodyType::SoftBody) == 0;
 }
 
 // A settled tick that applies no batch, runs no callable and makes no contact
@@ -291,7 +306,8 @@ bool WorldCore::lockstep() const {
 bool WorldCore::busy() const {
     return !queue_.empty() || callbacks_.any_step() || !characters_->empty() ||
            callbacks_.earliest_at_tick.load() <= tick_.load() ||
-           system_.GetNumActiveBodies(JPH::EBodyType::RigidBody) > 0;
+           ragdolls_->driving() || soft_->driving() || system_.GetNumActiveBodies(JPH::EBodyType::RigidBody) > 0 ||
+           system_.GetNumActiveBodies(JPH::EBodyType::SoftBody) > 0;
 }
 
 void WorldCore::optimize_if_due() {
@@ -579,6 +595,11 @@ bool WorldCore::tick_once() {
     activate_motor_joints();
     characters_->step(dt_, uint32_t(index + 1), *jobs_, tick_events_);
     vehicles_->before_step(dt_);
+    ragdolls_->before_step(time_, dt_);
+    soft_->before_step(dt_, [this](Uid uid) {
+        const Row *row = find(uid);
+        return row ? row->id : JPH::BodyID();
+    });
     const auto t2b = Clock::now();
     verdict_tick_ = uint32_t(index + 1);
     system_.Update(float(dt_), settings_.collision_steps, temp_.get(), jobs_.get());
@@ -602,6 +623,7 @@ bool WorldCore::tick_once() {
                 tick_events_);
     expire_verdicts(uint32_t(tick));
     vehicles_->after_step(uint32_t(tick), tick_events_);
+    soft_->after_step(tick);
     ring_.append(tick_events_);
     quiet_ = was_settled && !reported && tick_events_.empty() && settled() ? quiet_ + 1 : 0;
     const auto t4 = Clock::now();
@@ -627,11 +649,13 @@ bool WorldCore::tick_once() {
 }
 
 void WorldCore::publish(uint64_t tick) {
-    system_.GetActiveBodies(JPH::EBodyType::RigidBody, active_);
-    for (const JPH::BodyID &id : active_) {
-        const uint32_t row = row_of_index_[id.GetIndex()];
-        if (row != kNoRow)
-            publisher_.mark(row);
+    for (JPH::EBodyType type : {JPH::EBodyType::RigidBody, JPH::EBodyType::SoftBody}) {
+        system_.GetActiveBodies(type, active_);
+        for (const JPH::BodyID &id : active_) {
+            const uint32_t row = row_of_index_[id.GetIndex()];
+            if (row != kNoRow)
+                publisher_.mark(row);
+        }
     }
     const JPH::BodyLockInterfaceNoLock &locks = system_.GetBodyLockInterfaceNoLock();
     auto buffer = publisher_.publish(
@@ -669,6 +693,8 @@ void WorldCore::publish(uint64_t tick) {
     characters_->write(*buffer);
     write_joints(*buffer);
     vehicles_->write(*buffer);
+    ragdolls_->write(*buffer);
+    soft_->write(*buffer);
     pool_size_ = publisher_.pool_size();
     std::lock_guard<std::mutex> guard(publish_lock_);
     published_ = std::move(buffer);
@@ -825,6 +851,8 @@ WorldStats WorldCore::stats() const {
     out.bodies = applied_bodies_.load();
     out.characters = applied_characters_.load();
     out.vehicles = applied_vehicles_.load();
+    out.ragdolls = applied_ragdolls_.load();
+    out.soft_bodies = applied_soft_.load();
     out.queued_bodies =
         size_t(std::max<int64_t>(0, reserved_bodies_.load())) - out.bodies - out.characters;
     out.queries = queries_.load();

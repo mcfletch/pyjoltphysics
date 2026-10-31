@@ -74,6 +74,32 @@ void SnapshotBuffer::resize_vehicles(uint32_t count, uint32_t wheel_count) {
     wheel_contact_normal.resize(size_t(wheel_count) * 3);
 }
 
+void SnapshotBuffer::resize_ragdolls(uint32_t count, uint32_t bone_count) {
+    ragdolls = count;
+    bones = bone_count;
+    rag_id.resize(count);
+    rag_mode.resize(count);
+    rag_strength.resize(count);
+    rag_self_collision.resize(count);
+    rag_first_bone.resize(count);
+    rag_bones.resize(count);
+    bone_uid.resize(bone_count);
+    bone_position.resize(size_t(bone_count) * 3);
+    bone_orientation.resize(size_t(bone_count) * 4);
+}
+
+void SnapshotBuffer::resize_soft_bodies(uint32_t count, uint32_t vertex_count) {
+    soft_bodies = count;
+    soft_vertex_total = vertex_count;
+    soft_uid.resize(count);
+    soft_first_vertex.resize(count);
+    soft_vertices.resize(count);
+    soft_version.resize(count);
+    soft_origin.resize(size_t(count) * 3);
+    soft_position.resize(size_t(vertex_count) * 3);
+    soft_normal.resize(size_t(vertex_count) * 3);
+}
+
 void SnapshotPublisher::mark(uint32_t row) {
     if (mark_stamp_.size() <= row)
         mark_stamp_.resize(size_t(row) + 1024, 0);

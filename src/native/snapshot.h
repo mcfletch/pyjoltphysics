@@ -99,6 +99,35 @@ struct SnapshotBuffer {
     std::vector<double> wheel_contact_point; // (w, 3)
     std::vector<float> wheel_contact_normal; // (w, 3)
 
+    // Ragdolls, every row written each tick, in ascending id; their bones in
+    // ragdoll order, each ragdoll's from rag_first_bone.
+    uint32_t ragdolls = 0;
+    uint32_t bones = 0;
+    std::vector<uint32_t> rag_id;
+    std::vector<uint8_t> rag_mode;            // RagdollMode
+    std::vector<float> rag_strength;          // the motors' share of their torque, 0 to 1
+    std::vector<uint8_t> rag_self_collision;
+    std::vector<uint32_t> rag_first_bone;
+    std::vector<uint32_t> rag_bones;
+    std::vector<Uid> bone_uid;
+    std::vector<double> bone_position;        // (b, 3) joint position, metres
+    std::vector<float> bone_orientation;      // (b, 4) joint orientation x, y, z, w
+
+    // Soft bodies in ascending uid; their vertices in body order, each body's
+    // from soft_first_vertex. A body's vertices are rewritten only when its
+    // version differs from the one this buffer holds, and every row is
+    // rewritten when soft_layout differs from the world's.
+    uint32_t soft_bodies = 0;
+    uint32_t soft_vertex_total = 0;
+    uint64_t soft_layout = 0;
+    std::vector<Uid> soft_uid;
+    std::vector<uint32_t> soft_first_vertex;
+    std::vector<uint32_t> soft_vertices;
+    std::vector<uint64_t> soft_version;       // the tick the vertices were cached at
+    std::vector<double> soft_origin;          // (n, 3) centre of mass, metres
+    std::vector<float> soft_position;         // (v, 3) relative to the origin, metres
+    std::vector<float> soft_normal;           // (v, 3) unit, or zero for a vertex on no face
+
     bool written = false;
     uint64_t written_stamp = 0;  // the publish that last wrote it
 
@@ -106,6 +135,8 @@ struct SnapshotBuffer {
     void resize_characters(uint32_t count);
     void resize_joints(uint32_t count);
     void resize_vehicles(uint32_t count, uint32_t wheel_count);
+    void resize_ragdolls(uint32_t count, uint32_t bone_count);
+    void resize_soft_bodies(uint32_t count, uint32_t vertex_count);
 };
 
 // Owned by the world thread.

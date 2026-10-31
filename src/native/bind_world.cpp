@@ -444,6 +444,8 @@ nb::dict stats(const World &world) {
     out["shapes"] = s.shapes;
     out["characters"] = s.characters;
     out["vehicles"] = s.vehicles;
+    out["ragdolls"] = s.ragdolls;
+    out["soft_bodies"] = s.soft_bodies;
     out["characters_ms"] = s.characters_ms;
     out["queries"] = s.queries;
     out["query_wait_ms"] = s.query_wait_ms;
@@ -1042,6 +1044,194 @@ nb::ndarray<nb::numpy, const T, Shape> veh_view(const Snapshot &s, const std::ve
     return view<T, Shape>(values, {rows, width});
 }
 
+// -- ragdolls -------------------------------------------------------------------------
+
+std::tuple<uint32_t, uint32_t, uint64_t> add_ragdoll(World &world, const Doubles &params,
+                                                     const In<double, nb::shape<-1, kBoneParamCount>> &bones,
+                                                     const Words &shape_id, uint64_t at_tick) {
+    if (params.shape(0) != kRagParamCount)
+        throw std::invalid_argument("params has " + std::to_string(params.shape(0)) + " values where " +
+                                    std::to_string(kRagParamCount) + " are needed");
+    AddRagdoll add;
+    RagdollDesc &d = add.desc;
+    d.params.assign(params.data(), params.data() + kRagParamCount);
+    check_finite(d.params, "params");
+    if (d.params[kRagMode] < 0 || d.params[kRagMode] > double(uint8_t(RagdollMode::Limp)))
+        throw std::invalid_argument("unknown ragdoll mode " + std::to_string(d.params[kRagMode]));
+    check_quaternions(std::vector<double>(d.params.begin() + kRagQX, d.params.begin() + kRagQW + 1), "rotation");
+    for (RagdollParam k : {kRagMotorFrequency, kRagMotorDamping, kRagRootFrequency, kRagRootDamping, kRagRootForce,
+                           kRagRootTorque, kRagFriction, kRagRestitution, kRagLinearDamping, kRagAngularDamping})
+        if (d.params[k] < 0.0)
+            throw std::invalid_argument("ragdoll setting " + std::to_string(k) + " is negative");
+    const size_t n = bones.shape(0);
+    if (n == 0)
+        throw std::invalid_argument("a ragdoll has at least one bone");
+    if (shape_id.shape(0) != n)
+        throw std::invalid_argument("shape_id has a row a bone");
+    d.bones.assign(bones.data(), bones.data() + bones.size());
+    check_finite(d.bones, "bones");
+    ShapeResolver resolve(world.core().shapes());
+    for (size_t i = 0; i < n; ++i) {
+        const std::string row = " (bone " + std::to_string(i) + ")";
+        const double parent = d.bone(i, kBoneParent);
+        if (i == 0 ? parent != -1.0 : !(parent >= 0.0 && parent < double(i) && parent == std::floor(parent)))
+            throw std::invalid_argument("a bone's parent comes before it, and only the first bone has none" + row);
+        if (!(d.bone(i, kBoneMass) > 0.0))
+            throw std::invalid_argument("a bone's mass is positive" + row);
+        if (!(d.bone(i, kBoneTwistMin) <= d.bone(i, kBoneTwistMax)))
+            throw std::invalid_argument("a bone's twist limits are min <= max" + row);
+        for (BoneParam k : {kBoneNormalCone, kBonePlaneCone, kBoneStrength, kBoneFriction})
+            if (d.bone(i, k) < 0.0)
+                throw std::invalid_argument("a bone's cone angles, strength and friction are not negative" + row);
+        const double *b = &d.bones[i * kBoneParamCount];
+        check_quaternions(std::vector<double>(b + kBoneRX, b + kBoneRW + 1), "bone rotation");
+        check_quaternions(std::vector<double>(b + kBoneQX, b + kBoneQW + 1), "bone shape rotation");
+        if (std::abs(b[kBoneTwistX]) + std::abs(b[kBoneTwistY]) + std::abs(b[kBoneTwistZ]) == 0.0)
+            throw std::invalid_argument("a bone's twist axis is not zero" + row);
+        Decoration decoration;
+        for (int c = 0; c < 3; ++c)
+            decoration.offset[c] = float(b[kBoneOX + c]);
+        for (int c = 0; c < 4; ++c)
+            decoration.rotation[c] = float(b[kBoneQX + c]);
+        d.shapes.push_back(resolve(0, ShapeParams{}, shape_id.data()[i], decoration, row));
+        if (!resolve.dynamic_ok())
+            throw std::invalid_argument("a bone's shape can be dynamic (no mesh, height field or plane)" + row);
+    }
+    RagdollId id = 0;
+    Uid first = 0;
+    const uint64_t seq = world.core().submit(Command(std::move(add)), at_tick, &first, nullptr, nullptr, &id);
+    return {id, first, seq};
+}
+
+uint64_t set_ragdoll_pose(World &world, uint32_t id, const Quats &rotations, const Vec3s &translations,
+                          std::array<double, 3> position, std::array<double, 4> rotation, uint64_t at_tick) {
+    SetRagdollPose pose;
+    pose.id = id;
+    pose.rotations = copy<double>(rotations, rotations.shape(0), "rotations");
+    pose.translations = copy<double>(translations, translations.shape(0), "translations");
+    check_quaternions(pose.rotations, "rotations");
+    check_finite(pose.translations, "translations");
+    for (int c = 0; c < 3; ++c)
+        pose.position[c] = position[c];
+    for (int c = 0; c < 4; ++c)
+        pose.rotation[c] = rotation[c];
+    if (!std::isnan(position[0])) {
+        check_finite(std::vector<double>(position.begin(), position.end()), "position");
+        check_quaternions(std::vector<double>(rotation.begin(), rotation.end()), "rotation");
+    }
+    return world.core().submit(Command(std::move(pose)), at_tick);
+}
+
+uint64_t set_ragdoll_clip(World &world, uint32_t id, const Doubles &times, const Quats &rotations,
+                          const Vec3s &translations, bool loop, uint64_t at_tick) {
+    SetRagdollClip clip;
+    clip.id = id;
+    clip.loop = loop;
+    clip.times.assign(times.data(), times.data() + times.size());
+    clip.rotations = copy<double>(rotations, rotations.shape(0), "rotations");
+    clip.translations = copy<double>(translations, translations.shape(0), "translations");
+    check_finite(clip.times, "times");
+    check_quaternions(clip.rotations, "rotations");
+    check_finite(clip.translations, "translations");
+    if (!clip.times.empty() && clip.times[0] != 0.0)
+        throw std::invalid_argument("clip times start at 0");
+    for (size_t i = 1; i < clip.times.size(); ++i)
+        if (!(clip.times[i] > clip.times[i - 1]))
+            throw std::invalid_argument("clip times ascend");
+    return world.core().submit(Command(std::move(clip)), at_tick);
+}
+
+template <typename T, typename Shape>
+nb::ndarray<nb::numpy, const T, Shape> rag_view(const Snapshot &s, const std::vector<T> &values, size_t width,
+                                                bool bones) {
+    const size_t rows = bones ? s.buffer->bones : s.buffer->ragdolls;
+    if (width == 1)
+        return view<T, Shape>(values, {rows});
+    return view<T, Shape>(values, {rows, width});
+}
+
+// -- soft bodies ----------------------------------------------------------------------
+
+std::vector<SoftPin> soft_pins(const Words &vertex, const Uids &body, const Vec3s &point, size_t vertices) {
+    const size_t n = vertex.shape(0);
+    const std::vector<uint32_t> v = copy<uint32_t>(vertex, n, "pin vertices");
+    const std::vector<Uid> b = copy<Uid>(body, n, "pin bodies");
+    const std::vector<double> p = copy<double>(point, n, "pin points");
+    check_finite(p, "pin points");
+    std::vector<SoftPin> out(n);
+    for (size_t i = 0; i < n; ++i) {
+        if (vertices && v[i] >= vertices)
+            throw std::invalid_argument("pin vertex " + std::to_string(v[i]) + " names no vertex");
+        out[i].vertex = v[i];
+        out[i].body = b[i];
+        for (int c = 0; c < 3; ++c)
+            out[i].point[c] = p[3 * i + c];
+    }
+    return out;
+}
+
+std::pair<uint32_t, uint64_t> add_soft_body(World &world, const Doubles &params, const Vec3s &positions,
+                                            const Floats &inv_mass, const In<uint32_t, nb::shape<-1, 3>> &faces,
+                                            const In<uint32_t, nb::shape<-1, 2>> &edges, const Floats &edge_compliance,
+                                            const In<uint32_t, nb::shape<-1, 4>> &tetrahedra, const Words &pin_vertex,
+                                            const Uids &pin_body, const Vec3s &pin_point, uint64_t at_tick) {
+    if (params.shape(0) != kSoftParamCount)
+        throw std::invalid_argument("params has " + std::to_string(params.shape(0)) + " values where " +
+                                    std::to_string(kSoftParamCount) + " are needed");
+    AddSoftBody add;
+    SoftBodyDesc &d = add.desc;
+    d.params.assign(params.data(), params.data() + kSoftParamCount);
+    for (size_t i = 0; i < kSoftParamCount; ++i)
+        if (!std::isfinite(d.params[i]) &&
+            !(std::isinf(d.params[i]) && d.params[i] > 0 &&
+              (i == kSoftCompliance || i == kSoftShearCompliance || i == kSoftBendCompliance || i == kSoftVolumeCompliance)))
+            throw std::invalid_argument("soft body setting " + std::to_string(i) + " is not finite");
+    check_quaternions(std::vector<double>(d.params.begin() + kSoftQX, d.params.begin() + kSoftQW + 1), "rotation");
+    for (SoftParam k : {kSoftCompliance, kSoftShearCompliance, kSoftBendCompliance, kSoftVolumeCompliance,
+                        kSoftPressure, kSoftLraStretch, kSoftLinearDamping, kSoftMaxVelocity, kSoftFriction,
+                        kSoftRestitution, kSoftVertexRadius})
+        if (d.params[k] < 0.0)
+            throw std::invalid_argument("soft body setting " + std::to_string(k) + " is negative");
+    if (!(d.params[kSoftIterations] >= 1.0))
+        throw std::invalid_argument("a soft body takes at least one solver iteration");
+    const size_t n = positions.shape(0);
+    if (n == 0)
+        throw std::invalid_argument("a soft body has at least one vertex");
+    const std::vector<double> points = copy<double>(positions, n, "positions");
+    check_finite(points, "positions");
+    d.positions.assign(points.begin(), points.end());
+    d.inv_mass = copy<float>(inv_mass, n, "inv_mass");
+    for (float m : d.inv_mass)
+        if (!(std::isfinite(m) && m >= 0.0f))
+            throw std::invalid_argument("inv_mass is finite and not negative");
+    d.faces.assign(faces.data(), faces.data() + faces.size());
+    d.edges.assign(edges.data(), edges.data() + edges.size());
+    d.edge_compliance = copy<float>(edge_compliance, edges.shape(0), "edge_compliance");
+    d.tetrahedra.assign(tetrahedra.data(), tetrahedra.data() + tetrahedra.size());
+    for (const std::vector<uint32_t> *indices : {&d.faces, &d.edges, &d.tetrahedra})
+        for (uint32_t v : *indices)
+            if (v >= n)
+                throw std::invalid_argument("a face, edge or tetrahedron names vertex " + std::to_string(v) +
+                                            " of " + std::to_string(n));
+    if (d.params[kSoftPressure] > 0.0 && d.faces.empty())
+        throw std::invalid_argument("a soft body with pressure has faces");
+    d.pins = soft_pins(pin_vertex, pin_body, pin_point, n);
+    // The settings are built now, on the calling thread, so a fault is raised here.
+    soft_settings(d);
+    Uid uid = 0;
+    const uint64_t seq = world.core().submit(Command(std::move(add)), at_tick, &uid);
+    return {uid, seq};
+}
+
+template <typename T, typename Shape>
+nb::ndarray<nb::numpy, const T, Shape> soft_view(const Snapshot &s, const std::vector<T> &values, size_t width,
+                                                 bool vertices) {
+    const size_t rows = vertices ? s.buffer->soft_vertex_total : s.buffer->soft_bodies;
+    if (width == 1)
+        return view<T, Shape>(values, {rows});
+    return view<T, Shape>(values, {rows, width});
+}
+
 }  // namespace
 
 void bind_world(nb::module_ &m) {
@@ -1311,6 +1501,70 @@ void bind_world(nb::module_ &m) {
             "wheel_contact_normal",
             [](const Snapshot &s) { return veh_view<float, nb::shape<-1, 3>>(s, s.buffer->wheel_contact_normal, 3, true); },
             nb::rv_policy::reference_internal)
+        .def_prop_ro("ragdoll_count", [](const Snapshot &s) { return s.buffer->ragdolls; })
+        .def_prop_ro("bone_count", [](const Snapshot &s) { return s.buffer->bones; })
+        .def_prop_ro(
+            "ragdoll_id", [](const Snapshot &s) { return rag_view<uint32_t, nb::shape<-1>>(s, s.buffer->rag_id, 1, false); },
+            nb::rv_policy::reference_internal)
+        .def_prop_ro(
+            "ragdoll_mode", [](const Snapshot &s) { return rag_view<uint8_t, nb::shape<-1>>(s, s.buffer->rag_mode, 1, false); },
+            nb::rv_policy::reference_internal)
+        .def_prop_ro(
+            "ragdoll_strength",
+            [](const Snapshot &s) { return rag_view<float, nb::shape<-1>>(s, s.buffer->rag_strength, 1, false); },
+            nb::rv_policy::reference_internal)
+        .def_prop_ro(
+            "ragdoll_self_collision",
+            [](const Snapshot &s) { return rag_view<uint8_t, nb::shape<-1>>(s, s.buffer->rag_self_collision, 1, false); },
+            nb::rv_policy::reference_internal)
+        .def_prop_ro(
+            "ragdoll_first_bone",
+            [](const Snapshot &s) { return rag_view<uint32_t, nb::shape<-1>>(s, s.buffer->rag_first_bone, 1, false); },
+            nb::rv_policy::reference_internal)
+        .def_prop_ro(
+            "ragdoll_bones",
+            [](const Snapshot &s) { return rag_view<uint32_t, nb::shape<-1>>(s, s.buffer->rag_bones, 1, false); },
+            nb::rv_policy::reference_internal)
+        .def_prop_ro(
+            "bone_uid", [](const Snapshot &s) { return rag_view<Uid, nb::shape<-1>>(s, s.buffer->bone_uid, 1, true); },
+            nb::rv_policy::reference_internal)
+        .def_prop_ro(
+            "bone_position",
+            [](const Snapshot &s) { return rag_view<double, nb::shape<-1, 3>>(s, s.buffer->bone_position, 3, true); },
+            nb::rv_policy::reference_internal)
+        .def_prop_ro(
+            "bone_orientation",
+            [](const Snapshot &s) { return rag_view<float, nb::shape<-1, 4>>(s, s.buffer->bone_orientation, 4, true); },
+            nb::rv_policy::reference_internal)
+        .def_prop_ro("soft_count", [](const Snapshot &s) { return s.buffer->soft_bodies; })
+        .def_prop_ro("soft_vertex_total", [](const Snapshot &s) { return s.buffer->soft_vertex_total; })
+        .def_prop_ro(
+            "soft_uid", [](const Snapshot &s) { return soft_view<Uid, nb::shape<-1>>(s, s.buffer->soft_uid, 1, false); },
+            nb::rv_policy::reference_internal)
+        .def_prop_ro(
+            "soft_first_vertex",
+            [](const Snapshot &s) { return soft_view<uint32_t, nb::shape<-1>>(s, s.buffer->soft_first_vertex, 1, false); },
+            nb::rv_policy::reference_internal)
+        .def_prop_ro(
+            "soft_vertices",
+            [](const Snapshot &s) { return soft_view<uint32_t, nb::shape<-1>>(s, s.buffer->soft_vertices, 1, false); },
+            nb::rv_policy::reference_internal)
+        .def_prop_ro(
+            "soft_version",
+            [](const Snapshot &s) { return soft_view<uint64_t, nb::shape<-1>>(s, s.buffer->soft_version, 1, false); },
+            nb::rv_policy::reference_internal)
+        .def_prop_ro(
+            "soft_origin",
+            [](const Snapshot &s) { return soft_view<double, nb::shape<-1, 3>>(s, s.buffer->soft_origin, 3, false); },
+            nb::rv_policy::reference_internal)
+        .def_prop_ro(
+            "soft_position",
+            [](const Snapshot &s) { return soft_view<float, nb::shape<-1, 3>>(s, s.buffer->soft_position, 3, true); },
+            nb::rv_policy::reference_internal)
+        .def_prop_ro(
+            "soft_normal",
+            [](const Snapshot &s) { return soft_view<float, nb::shape<-1, 3>>(s, s.buffer->soft_normal, 3, true); },
+            nb::rv_policy::reference_internal)
         .def_prop_ro(
             "changed",
             [](const Snapshot &s) {
@@ -1556,6 +1810,57 @@ void bind_world(nb::module_ &m) {
                 return w.core().submit(Command(std::move(set)), at_tick);
             },
             nb::arg("ids"), nb::arg("enabled"), nb::arg("at_tick") = 0)
+        .def("add_ragdoll", &add_ragdoll, nb::arg("params"), nb::arg("bones"), nb::arg("shape_id"),
+             nb::arg("at_tick") = 0,
+             "Queue a ragdoll; return its id, its first bone's uid and the batch's sequence number.")
+        .def(
+            "remove_ragdolls",
+            [](World &w, const Uids &ids, uint64_t at_tick) {
+                return w.core().submit(Command(RemoveRagdolls{uids(ids)}), at_tick);
+            },
+            nb::arg("ids"), nb::arg("at_tick") = 0)
+        .def(
+            "set_ragdoll_modes",
+            [](World &w, const Uids &ids, uint8_t mode, double blend, uint64_t at_tick) {
+                if (mode > uint8_t(RagdollMode::Limp))
+                    throw std::invalid_argument("unknown ragdoll mode " + std::to_string(mode));
+                if (!(std::isfinite(blend) && blend >= 0.0))
+                    throw std::invalid_argument("blend is finite and not negative");
+                return w.core().submit(Command(SetRagdollModes{uids(ids), mode, blend}), at_tick);
+            },
+            nb::arg("ids"), nb::arg("mode"), nb::arg("blend"), nb::arg("at_tick") = 0)
+        .def("set_ragdoll_pose", &set_ragdoll_pose, nb::arg("id"), nb::arg("rotations"), nb::arg("translations"),
+             nb::arg("position"), nb::arg("rotation"), nb::arg("at_tick") = 0)
+        .def("set_ragdoll_clip", &set_ragdoll_clip, nb::arg("id"), nb::arg("times"), nb::arg("rotations"),
+             nb::arg("translations"), nb::arg("loop"), nb::arg("at_tick") = 0)
+        .def(
+            "set_ragdoll_strength",
+            [](World &w, uint32_t id, const Doubles &strength, uint64_t at_tick) {
+                SetRagdollStrength set{id, std::vector<double>(strength.data(), strength.data() + strength.size())};
+                for (double v : set.strength)
+                    if (!(std::isfinite(v) && v >= 0.0))
+                        throw std::invalid_argument("strength is finite and not negative");
+                return w.core().submit(Command(std::move(set)), at_tick);
+            },
+            nb::arg("id"), nb::arg("strength"), nb::arg("at_tick") = 0)
+        .def("add_soft_body", &add_soft_body, nb::arg("params"), nb::arg("positions"), nb::arg("inv_mass"),
+             nb::arg("faces"), nb::arg("edges"), nb::arg("edge_compliance"), nb::arg("tetrahedra"),
+             nb::arg("pin_vertex"), nb::arg("pin_body"), nb::arg("pin_point"), nb::arg("at_tick") = 0,
+             "Queue a soft body; return its uid and the batch's sequence number.")
+        .def(
+            "set_soft_pins",
+            [](World &w, Uid uid, const Words &vertex, const Uids &body, const Vec3s &point, uint64_t at_tick) {
+                return w.core().submit(Command(SetSoftPins{uid, soft_pins(vertex, body, point, 0)}), at_tick);
+            },
+            nb::arg("uid"), nb::arg("vertex"), nb::arg("body"), nb::arg("point"), nb::arg("at_tick") = 0)
+        .def(
+            "set_wind",
+            [](World &w, const Uids &ids, const Vec3s &force, uint64_t at_tick) {
+                SetWind set{uids(ids), copy<double>(force, ids.shape(0), "force")};
+                check_finite(set.force, "force");
+                return w.core().submit(Command(std::move(set)), at_tick);
+            },
+            nb::arg("uids"), nb::arg("force"), nb::arg("at_tick") = 0)
         .def("add_vehicle", &add_vehicle, nb::arg("chassis"), nb::arg("kind"), nb::arg("cast"), nb::arg("params"),
              nb::arg("wheels"), nb::arg("torque_curve"), nb::arg("longitudinal"), nb::arg("lateral"), nb::arg("gears"),
              nb::arg("reverse_gears"), nb::arg("differentials"), nb::arg("anti_roll_bars"), nb::arg("tracks"),

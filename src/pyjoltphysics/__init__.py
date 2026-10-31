@@ -11,7 +11,8 @@ on the calling thread (:meth:`World.raycast`); characters
 (:meth:`World.add_character`) move on the world thread every tick. Joints
 (:class:`Joint`), materials (:attr:`World.materials`), collision filters,
 gravity zones (:class:`GravityZone`) and kinematic tracks (:class:`Track`)
-are commands like the rest.
+are commands like the rest, as are vehicles (:class:`VehicleSettings`),
+ragdolls (:class:`RagdollSettings`) and soft bodies (:class:`SoftBodySettings`).
 
 >>> import pyjoltphysics
 >>> pyjoltphysics.jolt_version()
@@ -53,8 +54,17 @@ from pyjoltphysics.fields import GravityZone, Track
 from pyjoltphysics.joints import Joint, JointRows, Motor
 from pyjoltphysics.materials import Material, MaterialTable
 from pyjoltphysics.queries import ALL_GROUPS, QueryFilter, RayHit, RayHits, ShapeHit
+from pyjoltphysics.ragdolls import (
+    Bone,
+    Ragdoll,
+    RagdollMode,
+    RagdollRows,
+    RagdollSettings,
+    forward_kinematics,
+)
 from pyjoltphysics.settings import WorldSettings
 from pyjoltphysics.shapes import Shape, ShapeInfo, heightfield_side
+from pyjoltphysics.softbodies import Bend, LongRange, SoftBody, SoftBodyRows, SoftBodySettings
 from pyjoltphysics.vehicles import (
     AntiRollBar,
     Differential,
@@ -198,6 +208,19 @@ __all__ = [
     'WheelCast',
     'WheelRows',
     'WheelSettings',
+    # ragdolls
+    'Bone',
+    'Ragdoll',
+    'RagdollMode',
+    'RagdollRows',
+    'RagdollSettings',
+    'forward_kinematics',
+    # soft bodies
+    'Bend',
+    'LongRange',
+    'SoftBody',
+    'SoftBodyRows',
+    'SoftBodySettings',
     # events
     'EVENT_DTYPE',
     'EndReason',

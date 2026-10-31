@@ -9,14 +9,23 @@ uint32_t uids_wanted(const Command &command) {
         return uint32_t(add->shapes.size());
     if (auto *swap = std::get_if<SwapBodies>(&command))
         return uint32_t(swap->add.shapes.size());
-    if (std::holds_alternative<AddCharacter>(command))
+    if (std::holds_alternative<AddCharacter>(command) || std::holds_alternative<AddSoftBody>(command))
         return 1;
+    if (auto *add = std::get_if<AddRagdoll>(&command))
+        return uint32_t(add->desc.shapes.size());
     return 0;
 }
 
 uint64_t CommandQueue::push(Batch &&batch, uint32_t uid_count, Uid *first_uid, JointId *first_joint,
-                            VehicleId *vehicle) {
+                            VehicleId *vehicle, RagdollId *ragdoll) {
     std::lock_guard<std::mutex> guard(lock_);
+    if (auto *add = std::get_if<AddRagdoll>(&batch.command)) {
+        if (next_ragdoll_ == std::numeric_limits<RagdollId>::max())
+            throw std::length_error("the world has assigned every 32-bit ragdoll id");
+        add->desc.id = next_ragdoll_++;
+        if (ragdoll)
+            *ragdoll = add->desc.id;
+    }
     if (auto *add = std::get_if<AddVehicle>(&batch.command)) {
         if (next_vehicle_ == std::numeric_limits<VehicleId>::max())
             throw std::length_error("the world has assigned every 32-bit vehicle id");
@@ -40,12 +49,16 @@ uint64_t CommandQueue::push(Batch &&batch, uint32_t uid_count, Uid *first_uid, J
             uids = &add->uids;
         else if (auto *swap = std::get_if<SwapBodies>(&batch.command))
             uids = &swap->add.uids;
+        else if (auto *doll = std::get_if<AddRagdoll>(&batch.command))
+            uids = &doll->desc.uids;
         if (uids != nullptr) {
             uids->resize(uid_count);
             for (uint32_t i = 0; i < uid_count; ++i)
                 (*uids)[i] = next_uid_ + i;
         } else if (auto *character = std::get_if<AddCharacter>(&batch.command)) {
             character->uid = next_uid_;
+        } else if (auto *soft = std::get_if<AddSoftBody>(&batch.command)) {
+            soft->desc.uid = next_uid_;
         }
         if (first_uid)
             *first_uid = next_uid_;

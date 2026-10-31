@@ -28,8 +28,10 @@
 #include "events.h"
 #include "layers.h"
 #include "queries.h"
+#include "ragdolls.h"
 #include "shapes.h"
 #include "snapshot.h"
+#include "softbodies.h"
 #include "vehicles.h"
 
 #include <Jolt/Core/JobSystem.h>
@@ -90,6 +92,8 @@ struct WorldStats {
     size_t shapes = 0;          // registered shape ids
     size_t characters = 0;
     size_t vehicles = 0;
+    size_t ragdolls = 0;
+    size_t soft_bodies = 0;
     uint64_t broadphase_optimizations = 0;
     size_t pairs = 0;
     size_t events_held = 0;
@@ -151,7 +155,7 @@ public:
     // -- commands: any thread, never waits for the world ---------------------
     // Returns the batch's sequence number; an add also returns its first uid.
     uint64_t submit(Command &&command, uint64_t at_tick, Uid *first_uid = nullptr, JointId *first_joint = nullptr,
-                    VehicleId *vehicle = nullptr);
+                    VehicleId *vehicle = nullptr, RagdollId *ragdoll = nullptr);
     uint64_t submitted_seq() const { return queue_.last_seq(); }
 
     // -- the thread: callers release the GIL ---------------------------------
@@ -297,6 +301,17 @@ private:
     void apply(VehicleInputs &inputs, uint64_t index);
     void apply(SetVehicleSurfaces &set, uint64_t index);
     void apply(SetSurfaceTable &set, uint64_t index);
+    void apply(AddRagdoll &add, uint64_t index);
+    void apply(RemoveRagdolls &remove, uint64_t index);
+    void apply(SetRagdollModes &set, uint64_t index);
+    void apply(SetRagdollPose &set, uint64_t index);
+    void apply(SetRagdollClip &set, uint64_t index);
+    void apply(SetRagdollStrength &set, uint64_t index);
+    void apply(AddSoftBody &add, uint64_t index);
+    void apply(SetSoftPins &set, uint64_t index);
+    void apply(SetWind &set, uint64_t index);
+    // Takes a ragdoll out: its pairs, rows, constraints and bodies.
+    void remove_ragdoll(RagdollId id, uint64_t index);
     // joints.cpp
     void remove_joint(Joint &joint, uint64_t index, uint16_t reason);
     void remove_joints_of(const std::vector<Uid> &uids, uint64_t index);
@@ -333,6 +348,11 @@ private:
     // Destroyed before the system, which holds its constraints and step listeners.
     std::unique_ptr<VehicleSystem> vehicles_;
     std::atomic<size_t> applied_vehicles_{0};
+    // Destroyed before the system, which holds their bodies and constraints.
+    std::unique_ptr<RagdollSystem> ragdolls_;
+    std::atomic<size_t> applied_ragdolls_{0};
+    std::unique_ptr<SoftBodySystem> soft_;
+    std::atomic<size_t> applied_soft_{0};
     ShapeLibrary shapes_;
 
     // Rows are dense: the snapshot's arrays have one per live body. Removing a

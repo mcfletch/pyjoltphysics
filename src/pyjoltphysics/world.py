@@ -40,8 +40,10 @@ from pyjoltphysics.fields import GravityZone, Track, zone_arrays
 from pyjoltphysics.joints import Joint, JointRows, joint_arrays
 from pyjoltphysics.materials import MaterialTable
 from pyjoltphysics.queries import ALL_GROUPS, DEFAULT_FILTER, QueryFilter, RayHit, RayHits, ShapeHit
+from pyjoltphysics.ragdolls import Ragdoll, RagdollMode, RagdollRows, RagdollSettings
 from pyjoltphysics.settings import WorldSettings
 from pyjoltphysics.shapes import Shape, ShapeInfo
+from pyjoltphysics.softbodies import SoftBody, SoftBodyRows, SoftBodySettings, pin_arrays
 from pyjoltphysics.vehicles import Vehicle, VehicleRows, VehicleSettings
 
 __all__ = [
@@ -69,6 +71,8 @@ EventsCallback = Callable[[npt.NDArray[np.void], int, float], object]
 ContactFilter = Callable[
     [int, int, tuple[float, float, float], tuple[float, float, float], float], object
 ]
+#: A point or quaternion: a sequence of floats or a 1-D array.
+Point = Sequence[float] | npt.NDArray[np.floating[Any]]
 #: ``fn(time)`` for :meth:`World.drive`: a position, or ``(position, quaternion)``.
 PoseFunction = Callable[[float], Any]
 
@@ -129,14 +133,18 @@ def _column(values: npt.ArrayLike, count: int, dtype: type, name: str) -> np.nda
     return np.ascontiguousarray(array)
 
 
-def _triple(values: Sequence[float], name: str) -> tuple[float, float, float]:
+def _triple(
+    values: Sequence[float] | npt.NDArray[np.floating[Any]], name: str
+) -> tuple[float, float, float]:
     x, y, z = (float(v) for v in values)
     if not all(math.isfinite(v) for v in (x, y, z)):
         raise ValueError('%s is not finite' % (name,))
     return (x, y, z)
 
 
-def _quad(values: Sequence[float]) -> tuple[float, float, float, float]:
+def _quad(
+    values: Sequence[float] | npt.NDArray[np.floating[Any]],
+) -> tuple[float, float, float, float]:
     x, y, z, w = (float(v) for v in values)
     return (x, y, z, w)
 
@@ -271,6 +279,16 @@ class Snapshot:
     def vehicles(self) -> VehicleRows:
         """Every vehicle and its wheels, as read-only views; see :class:`~pyjoltphysics.VehicleRows`."""
         return VehicleRows(self._native)
+
+    @property
+    def ragdolls(self) -> RagdollRows:
+        """Every ragdoll and its bones, as read-only views; see :class:`~pyjoltphysics.RagdollRows`."""
+        return RagdollRows(self._native)
+
+    @property
+    def soft_bodies(self) -> SoftBodyRows:
+        """Every soft body and its vertices, as read-only views; see :class:`~pyjoltphysics.SoftBodyRows`."""
+        return SoftBodyRows(self._native)
 
     def includes(self, seq: int) -> bool:
         """True when the batch with sequence number ``seq``, and every batch before it, is applied."""
@@ -906,6 +924,160 @@ class World:
         return self._native.set_surface_table(
             grips, _column(rolling, len(grips), np.float32, 'rolling'), at_tick
         )
+
+    # -- ragdolls ----------------------------------------------------------
+
+    def add_ragdoll(
+        self,
+        settings: RagdollSettings,
+        position: Point = (0.0, 0.0, 0.0),
+        rotation: Point = (0.0, 0.0, 0.0, 1.0),
+        mode: RagdollMode = RagdollMode.LIMP,
+        at_tick: int = 0,
+    ) -> Ragdoll:
+        """Queue a ragdoll standing in its rest pose, its frame at ``position`` turned by ``rotation``.
+
+        The ragdoll id and its bones' uids are assigned now. The rest pose is
+        its first pose target. A ragdoll Jolt has no room for is skipped and
+        counted in ``stats()['rejected']``.
+        """
+        native = settings.native(
+            self.add_shape, _triple(position, 'position'), _quad(rotation), mode
+        )
+        rid, first, _ = self._native.add_ragdoll(at_tick=at_tick, **native)
+        bones = np.arange(first, first + len(settings.bones), dtype=np.uint32)
+        return Ragdoll(self, rid, bones, settings)
+
+    def remove_ragdolls(self, ids: npt.ArrayLike, at_tick: int = 0) -> int:
+        """Queue removing ragdolls with their bodies; their bones' pairs end with reason ``REMOVED``."""
+        return self._native.remove_ragdolls(_uids(ids), at_tick)
+
+    def set_ragdoll_modes(
+        self, ids: npt.ArrayLike, mode: RagdollMode, blend: float = 0.0, at_tick: int = 0
+    ) -> int:
+        """Queue a change of mode for ragdolls, over ``blend`` seconds.
+
+        Into powered or limp the motors' strength moves to full or none over
+        the blend; out of kinematic the bones keep their velocities. Into
+        kinematic the bones move from where they are to the pose target over
+        the blend.
+        """
+        return self._native.set_ragdoll_modes(_uids(ids), int(mode), float(blend), at_tick)
+
+    def set_ragdoll_pose(
+        self,
+        ragdoll: Ragdoll,
+        rotations: npt.ArrayLike | None,
+        translations: npt.ArrayLike | None = None,
+        position: Point | None = None,
+        rotation: Point | None = None,
+        at_tick: int = 0,
+    ) -> int:
+        """Queue the held pose target of a ragdoll; it serves while no clip plays.
+
+        ``rotations`` (B, 4) and ``translations`` (B, 3) are each joint's in
+        its parent joint's frame (the root's in the ragdoll's frame), as a
+        character's animation gives them; None keeps those held now.
+        ``position`` and ``rotation`` move the ragdoll's frame; None keeps it.
+        """
+        count = len(ragdoll.bones)
+        rot = np.zeros((0, 4)) if rotations is None else _vectors(rotations, count, 4, 'rotations')
+        trans = (
+            np.zeros((0, 3))
+            if translations is None
+            else _vectors(translations, count, 3, 'translations')
+        )
+        place = (
+            (math.nan, math.nan, math.nan) if position is None else _triple(position, 'position')
+        )
+        turn = _quad(rotation if rotation is not None else (0.0, 0.0, 0.0, 1.0))
+        return self._native.set_ragdoll_pose(ragdoll.id, rot, trans, place, turn, at_tick)
+
+    def set_ragdoll_clip(
+        self,
+        ragdoll: Ragdoll,
+        times: npt.ArrayLike,
+        rotations: npt.ArrayLike,
+        translations: npt.ArrayLike | None = None,
+        loop: bool = False,
+        at_tick: int = 0,
+    ) -> int:
+        """Queue a clip as a ragdoll's pose target, evaluated on the world thread every tick.
+
+        ``times`` (K,) ascend from 0, in seconds from the tick that applies the
+        batch; ``rotations`` (K, B, 4) and ``translations`` (K, B, 3) are the
+        poses at them, as :meth:`set_ragdoll_pose` takes one. Rotations are
+        interpolated by slerp and translations linearly; past the last time
+        the clip holds its last pose, or with ``loop`` starts again. Empty
+        ``times`` clear the clip.
+        """
+        count = len(ragdoll.bones)
+        when = np.ascontiguousarray(times, dtype=np.float64).reshape(-1)
+        keys = len(when)
+        rot = np.ascontiguousarray(rotations, dtype=np.float64).reshape(keys * count, 4)
+        trans = (
+            np.zeros((0, 3))
+            if translations is None
+            else np.ascontiguousarray(translations, dtype=np.float64).reshape(keys * count, 3)
+        )
+        return self._native.set_ragdoll_clip(ragdoll.id, when, rot, trans, bool(loop), at_tick)
+
+    def set_ragdoll_strength(
+        self, ragdoll: Ragdoll, strength: npt.ArrayLike, at_tick: int = 0
+    ) -> int:
+        """Queue the motors' torque limit of each bone of a ragdoll, N m: one for all or (B,)."""
+        count = len(ragdoll.bones)
+        values = np.ascontiguousarray(
+            np.broadcast_to(np.asarray(strength, dtype=np.float64), (count,))
+        )
+        return self._native.set_ragdoll_strength(ragdoll.id, values, at_tick)
+
+    # -- soft bodies -------------------------------------------------------
+
+    def add_soft_body(
+        self,
+        settings: SoftBodySettings,
+        position: Point = (0.0, 0.0, 0.0),
+        rotation: Point = (0.0, 0.0, 0.0, 1.0),
+        pins: tuple[Sequence[int], npt.ArrayLike] | None = None,
+        pin_bodies: Sequence[int] | None = None,
+        at_tick: int = 0,
+    ) -> SoftBody:
+        """Queue a soft body with its vertices placed by ``position`` and ``rotation``.
+
+        ``pins`` is (vertices, points): each vertex is held at its point, a
+        world position, or a point in the frame of the body in ``pin_bodies``
+        at the same index. The uid is assigned now; the settings are checked
+        and built on this thread, so a fault in them raises here.
+        """
+        vertices, points = pins if pins is not None else ([], np.zeros((0, 3)))
+        pin = pin_arrays(len(settings), vertices, points, pin_bodies)
+        native = settings.native(_triple(position, 'position'), _quad(rotation), *pin)
+        uid, _ = self._native.add_soft_body(at_tick=at_tick, **native)
+        return SoftBody(self, uid, settings)
+
+    def set_soft_pins(
+        self,
+        uid: int,
+        vertices: Sequence[int],
+        points: npt.ArrayLike,
+        bodies: Sequence[int] | None = None,
+        at_tick: int = 0,
+    ) -> int:
+        """Queue replacing a soft body's pins: (vertices, points), points in ``bodies``' frames or the world.
+
+        A vertex no longer pinned takes back its own mass.
+        """
+        vertex, body, point = pin_arrays(0, vertices, points, bodies)
+        return self._native.set_soft_pins(int(uid), vertex, body, point, at_tick)
+
+    def set_wind(self, uids: npt.ArrayLike, forces: npt.ArrayLike, at_tick: int = 0) -> int:
+        """Queue the wind on soft bodies: a force (N) on each, shared among its vertices every tick.
+
+        It holds until changed; (0, 0, 0) stops it.
+        """
+        ids = _uids(uids)
+        return self._native.set_wind(ids, _vectors(forces, len(ids), 3, 'forces'), at_tick)
 
     # -- joints ------------------------------------------------------------
 

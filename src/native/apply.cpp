@@ -9,6 +9,7 @@
 #include <Jolt/Physics/Body/BodyCreationSettings.h>
 #include <Jolt/Physics/Body/BodyInterface.h>
 #include <Jolt/Physics/Body/BodyLock.h>
+#include <Jolt/Physics/SoftBody/SoftBodyCreationSettings.h>
 #include <Jolt/Physics/StateRecorderImpl.h>
 #include <Jolt/Physics/Collision/BroadPhase/BroadPhaseQuery.h>
 #include <Jolt/Physics/Collision/CollisionCollectorImpl.h>
@@ -188,12 +189,20 @@ void WorldCore::apply(RemoveBodies &remove, uint64_t index) {
         const Row *row = find(uid);
         if (row == nullptr)
             continue;
+        if (!ragdolls_->empty() && ragdolls_->owns(uid)) {
+            // A bone goes with its ragdoll, by remove_ragdolls.
+            ++rejected_;
+            continue;
+        }
         ids.push_back(row->id);
         uids.push_back(uid);
         unbind_row(uid);
     }
     if (ids.empty())
         return;
+    const size_t soft_before = soft_->size();
+    soft_->remove(uids);
+    applied_soft_ -= soft_before - soft_->size();
     const size_t vehicles_before = vehicles_->size();
     vehicles_->remove_chassis(uids);
     applied_vehicles_ -= vehicles_before - vehicles_->size();
@@ -633,6 +642,130 @@ void WorldCore::apply(SetVehicleSurfaces &set, uint64_t) {
 
 void WorldCore::apply(SetSurfaceTable &set, uint64_t) {
     vehicles_->set_table(std::move(set.grip), std::move(set.rolling));
+}
+
+
+
+// -- ragdolls ----------------------------------------------------------------------
+
+void WorldCore::apply(AddRagdoll &add, uint64_t) {
+    const RagdollDesc &desc = add.desc;
+    const double *p = desc.params.data();
+    const JPH::ObjectLayer layer = layers_.layer(uint32_t(p[kRagGroup]), uint32_t(p[kRagMask]), true,
+                                                 LayerRole::Body, uint16_t(p[kRagFilter]));
+    if (joint_filter_ == nullptr)
+        joint_filter_ = new JointPairFilter;
+    std::vector<std::pair<int, int>> pairs;
+    Ragdoll *doll = ragdolls_->add(desc, layer, joint_filter_, pairs, time_);
+    if (doll == nullptr) {
+        ++rejected_;
+        reserved_bodies_ -= int64_t(desc.uids.size());
+        return;
+    }
+    for (const auto &[a, b] : pairs)
+        joint_filter_->add(desc.uids[size_t(a)], desc.uids[size_t(b)]);
+    for (size_t i = 0; i < desc.uids.size(); ++i)
+        bind_row(desc.uids[i], doll->ragdoll->GetBodyID(int(i)));
+    applied_bodies_ += desc.uids.size();
+    ++applied_ragdolls_;
+}
+
+void WorldCore::remove_ragdoll(RagdollId id, uint64_t index) {
+    std::vector<JPH::BodyID> ids;
+    std::vector<Uid> uids;
+    std::vector<std::pair<int, int>> pairs;
+    // The pairs end before the bodies go, so their END records name live rows.
+    if (!ragdolls_->owns_ragdoll(id))
+        return;
+    ragdolls_->bodies_of(id, ids, uids);
+    remove_joints_of(uids, index);
+    pairs_.remove_bodies(ids, uint32_t(index + 1), tick_events_);
+    for (Uid uid : uids)
+        unbind_row(uid);
+    collector_.quiet = true;
+    ragdolls_->remove(id, ids, uids, pairs);
+    collector_.quiet = false;
+    if (joint_filter_ != nullptr)
+        for (const auto &[a, b] : pairs)
+            joint_filter_->remove(uids[size_t(a)], uids[size_t(b)]);
+    reserved_bodies_ -= int64_t(uids.size());
+    applied_bodies_ -= uids.size();
+    --applied_ragdolls_;
+}
+
+void WorldCore::apply(RemoveRagdolls &remove, uint64_t index) {
+    for (RagdollId id : remove.ids)
+        remove_ragdoll(id, index);
+}
+
+void WorldCore::apply(SetRagdollModes &set, uint64_t) {
+    for (RagdollId id : set.ids)
+        if (!ragdolls_->set_mode(id, static_cast<RagdollMode>(set.mode), set.blend, time_))
+            ++rejected_;
+}
+
+void WorldCore::apply(SetRagdollPose &set, uint64_t) {
+    if (!ragdolls_->set_pose(set))
+        ++rejected_;
+}
+
+void WorldCore::apply(SetRagdollClip &set, uint64_t) {
+    if (!ragdolls_->set_clip(set, time_))
+        ++rejected_;
+}
+
+void WorldCore::apply(SetRagdollStrength &set, uint64_t) {
+    if (!ragdolls_->set_strength(set.id, set.strength))
+        ++rejected_;
+}
+
+// -- soft bodies -------------------------------------------------------------------
+
+void WorldCore::apply(AddSoftBody &add, uint64_t index) {
+    const SoftBodyDesc &desc = add.desc;
+    const double *p = desc.params.data();
+    JPH::SoftBodyCreationSettings settings;
+    settings.mSettings = soft_settings(desc);
+    settings.mPosition = JPH::RVec3(p[kSoftX], p[kSoftY], p[kSoftZ]);
+    settings.mRotation = JPH::Quat(float(p[kSoftQX]), float(p[kSoftQY]), float(p[kSoftQZ]), float(p[kSoftQW])).Normalized();
+    const auto flags = uint32_t(p[kSoftFlags]);
+    settings.mUserData = user_data(desc.uid, flags, uint16_t(p[kSoftMaterial]));
+    settings.mObjectLayer = layers_.layer(uint32_t(p[kSoftGroup]), uint32_t(p[kSoftMask]), true, LayerRole::Body,
+                                          uint16_t(p[kSoftFilter]));
+    settings.mNumIterations = uint32_t(p[kSoftIterations]);
+    settings.mLinearDamping = float(p[kSoftLinearDamping]);
+    settings.mMaxLinearVelocity = float(p[kSoftMaxVelocity]);
+    settings.mRestitution = float(p[kSoftRestitution]);
+    settings.mFriction = float(p[kSoftFriction]);
+    settings.mPressure = float(p[kSoftPressure]);
+    settings.mGravityFactor = float(p[kSoftGravityFactor]);
+    settings.mVertexRadius = float(p[kSoftVertexRadius]);
+    settings.mAllowSleeping = p[kSoftAllowSleep] != 0.0 && (flags & flag::kNoSleep) == 0;
+    settings.mFacesDoubleSided = p[kSoftDoubleSided] != 0.0;
+    JPH::BodyInterface &bodies = system_.GetBodyInterfaceNoLock();
+    JPH::Body *body = bodies.CreateSoftBody(settings);
+    if (body == nullptr) {
+        ++rejected_;
+        reserved_bodies_ -= 1;
+        return;
+    }
+    bind_row(desc.uid, body->GetID());
+    bodies.AddBody(body->GetID(), JPH::EActivation::Activate);
+    soft_->add(desc, body->GetID(), index);
+    applied_bodies_ += 1;
+    ++applied_soft_;
+}
+
+void WorldCore::apply(SetSoftPins &set, uint64_t) {
+    if (!soft_->set_pins(set.uid, std::move(set.pins)))
+        ++rejected_;
+}
+
+void WorldCore::apply(SetWind &set, uint64_t) {
+    for (size_t i = 0; i < set.uids.size(); ++i)
+        if (!soft_->set_wind(set.uids[i], JPH::Vec3(float(set.force[3 * i]), float(set.force[3 * i + 1]),
+                                                    float(set.force[3 * i + 2]))))
+            ++rejected_;
 }
 
 }  // namespace pj
