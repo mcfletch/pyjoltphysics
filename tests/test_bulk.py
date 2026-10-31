@@ -3,16 +3,26 @@
 from __future__ import annotations
 
 import os
+import time
 
 import numpy as np
+import pytest
 
-from pyjoltphysics import BodyBatch, MotionType, Shape
+from pyjoltphysics import BodyBatch, MotionType, Shape, World
 from pyjoltphysics.testing import MakeWorld, floor, grid
 
 
 def slowdown() -> float:
     """Return 10 under tools/asan.sh, which preloads the sanitizer runtimes, and 1 elsewhere."""
     return 10.0 if 'libasan' in os.environ.get('LD_PRELOAD', '') else 1.0
+
+
+def optimizations_reach(world: World, count: int, timeout: float = 5.0) -> int:
+    """Return the broad phase rebuilds once they are ``count``, or the number after ``timeout`` seconds."""
+    deadline = time.monotonic() + timeout
+    while world.stats()['broadphase_optimizations'] != count and time.monotonic() < deadline:
+        time.sleep(0.01)
+    return int(world.stats()['broadphase_optimizations'])
 
 
 def posts(count: int) -> np.ndarray:
@@ -22,6 +32,7 @@ def posts(count: int) -> np.ndarray:
     return p
 
 
+@pytest.mark.serial
 def test_ten_thousand_static_posts_apply_within_one_tick(make_world: MakeWorld) -> None:
     world = make_world(threads=4)
     world.add_bodies(floor(300.0))
@@ -45,7 +56,8 @@ def test_the_broad_phase_is_rebuilt_once_after_a_large_static_add(make_world: Ma
     world.add_bodies(BodyBatch.boxes(posts(2000), size=(0.4, 2.0, 0.4), motion=MotionType.STATIC))
     world.run_ticks(1)
     world.run_ticks(5)
-    assert world.stats()['broadphase_optimizations'] == 1
+    # The world thread rebuilds the trees once it has no tick due, after run_ticks returns.
+    assert optimizations_reach(world, 1) == 1
     # A few dynamic bodies later do not ask for another.
     world.add_bodies(BodyBatch.boxes(grid(300, spacing=1.5, y0=5.0), size=(0.5, 0.5, 0.5)))
     world.run_ticks(5)

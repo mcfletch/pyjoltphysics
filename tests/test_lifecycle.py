@@ -22,6 +22,29 @@ def thread_count() -> int:
     return len(os.listdir('/proc/self/task'))
 
 
+def steady_thread_count(want: int | None = None, timeout: float = 5.0) -> int:
+    """Return the thread count once it is ``want``, or once it holds for 0.1 s with ``want`` None.
+
+    A joined thread can stay listed in ``/proc/self/task`` for a moment after
+    ``pthread_join`` returns: the kernel wakes the joiner before it removes the
+    task. A thread that was never joined stays listed, and the count returned
+    after ``timeout`` seconds says so.
+    """
+    deadline = time.monotonic() + timeout
+    count = thread_count()
+    held = time.monotonic()
+    while time.monotonic() < deadline:
+        if want is not None and count == want:
+            return count
+        time.sleep(0.01)
+        now = thread_count()
+        if now != count:
+            count, held = now, time.monotonic()
+        elif want is None and time.monotonic() - held >= 0.1:
+            return count
+    return count
+
+
 def run_python(source: str, timeout: float = 60.0) -> subprocess.CompletedProcess[str]:
     return subprocess.run(
         [sys.executable, '-c', textwrap.dedent(source)],
@@ -116,15 +139,18 @@ def test_worlds_are_made_stopped_and_made_again() -> None:
 
 @pytest.mark.skipif(not LINUX, reason='counts threads in /proc')
 def test_a_dropped_world_joins_its_threads() -> None:
-    before = thread_count()
+    # A world an earlier test left in a reference cycle joins its threads when the
+    # collector frees it, so it is freed before the count is taken.
+    gc.collect()
+    before = steady_thread_count()
     world = World(WorldSettings(threads=4))
     world.add_bodies(BodyBatch.spheres(grid(20)))
     world.start()
     assert world.wait_tick(2, timeout=10.0)
-    assert thread_count() == before + 4
+    assert steady_thread_count(before + 4) == before + 4
     del world
     gc.collect()
-    assert thread_count() == before
+    assert steady_thread_count(before) == before
 
 
 def closed_over_world() -> weakref.ref[World]:

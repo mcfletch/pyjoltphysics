@@ -196,6 +196,10 @@ def test_queries_from_many_threads_beside_a_free_running_world(make_world: MakeW
     world.start()
     # A query sees what the world has applied: the bodies are in from its first tick.
     assert world.wait_tick(1, 5.0)
+    # The ticks half a second gives this world on this machine with no query running.
+    start = world.tick
+    time.sleep(0.5)
+    alone = world.tick - start
     errors: list[BaseException] = []
     counts = [0] * 6
 
@@ -214,15 +218,18 @@ def test_queries_from_many_threads_beside_a_free_running_world(make_world: MakeW
             errors.append(error)
 
     threads = [threading.Thread(target=hammer, args=(k,)) for k in range(6)]
+    start = world.tick
     for thread in threads:
         thread.start()
     for thread in threads:
         thread.join()
+    beside = world.tick - start
     world.stop()
     assert not errors, errors[0]
     assert min(counts) > 3
-    # At 240 Hz for half a second: the queries hold the world thread off no tick.
-    assert world.tick > 90
+    # The queries hold the world thread off no tick: half a second of them runs as many
+    # ticks as half a second alone, within what a busy machine takes from either.
+    assert beside > 0.6 * alone
 
 
 def test_a_query_inside_a_world_callback_runs_without_the_lock(make_world: MakeWorld) -> None:
