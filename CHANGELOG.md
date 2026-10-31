@@ -40,6 +40,7 @@
 - `stats()`: `events_held`, the records the ring holds until the next drain.
 - A quiet lockstep world (nothing awake or acting, two ticks with no batch and no contact report) counts `run_ticks` ticks without stepping; `stats()['quiet_ticks']`.
 - `Snapshot.rows_of` looks uids up in an array indexed by uid.
+- A character standing or knocked down on walkable ground, with no move asked for, stays where it is; a `BEGIN` record's `approach` and `impulse` measure the closing speed against the character's velocity of the tick before.
 
 - `jolt_version()`, `build_options()` and `selftest()` over the compiled module `pyjoltphysics._native`.
 - Jolt Physics v5.6.0 (commit e77f1755), double precision, cross-platform deterministic, SSE4.2 floor on x86-64.

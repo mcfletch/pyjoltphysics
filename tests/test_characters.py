@@ -220,6 +220,27 @@ def test_a_steep_slope_slides_the_character_down(make_world: MakeWorld) -> None:
     assert state_of(walker) is CharacterState.AIRBORNE
 
 
+@pytest.mark.parametrize('degrees', [10.0, 25.0, 40.0])
+@pytest.mark.parametrize('down', [False, True])
+def test_a_character_at_rest_on_a_walkable_slope_stays_where_it_is(
+    make_world: MakeWorld, degrees: float, down: bool
+) -> None:
+    """Standing or knocked down, with no move asked for: 1 mm in two seconds at most."""
+    rig = Rig(make_world)
+    rig.world.add_bodies(
+        BodyBatch.of_shape([(0.0, 0.0, 0.0)], ramp_mesh(degrees), motion=MotionType.STATIC)
+    )
+    rise = math.tan(math.radians(degrees))
+    walker = rig.character(at=(4.0, 4.0 * rise, 0.0), maxSlope=50.0)
+    if down:
+        walker.knock_down()
+        rig.step(0.5)
+    start = np.array(walker.feet)
+    rig.step(2.0)
+    assert np.abs(np.array(walker.feet) - start).max() < 1e-3
+    assert walker.grounded
+
+
 # -- jumping and falling ----------------------------------------------------------
 
 

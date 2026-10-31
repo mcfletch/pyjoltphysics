@@ -122,6 +122,9 @@ struct Character {
     float landing_speed = 0.0f;
     uint32_t landed_tick = 0;
     JPH::Vec3 velocity = JPH::Vec3::sZero();
+    // The velocity over the tick before this one: what a touch begun in this
+    // tick closed at, before the touch pushed the character.
+    JPH::Vec3 approaching = JPH::Vec3::sZero();
     JPH::Vec3 ground_normal = JPH::Vec3::sZero();
     Uid ground_uid = kNoBody;
     bool pushing = false;  // walked into a body it can push, last tick
@@ -528,7 +531,7 @@ void track_touches(const JPH::PhysicsSystem &system, Character &c, uint32_t tick
         uids.push_back(uid);
         if (!std::binary_search(c.touching.begin(), c.touching.end(), uid)) {
             const float approach =
-                std::max(0.0f, (contact->mLinearVelocity - c.velocity).Dot(contact->mContactNormal));
+                std::max(0.0f, (contact->mLinearVelocity - c.approaching).Dot(contact->mContactNormal));
             c.event(EventPhase::Begin, tick, uid, approach, contact->mPosition, -contact->mContactNormal);
             if (contact->mMotionTypeB == JPH::EMotionType::Dynamic && !contact->mBodyB.IsInvalid()) {
                 // Islands give each dynamic body to one job, so reading it without a lock is safe.
@@ -551,6 +554,7 @@ void step_one(const JPH::PhysicsSystem &system, Character &c, double dt, uint32_
     // Velocities handed to Jolt cover a distance in Jolt's float time step.
     const double per = 1.0 / double(dt_f);
     advance_pose(system, c, dt, temp);
+    c.approaching = c.velocity;
     const JPH::RVec3 start = c.feet();
     const bool was_pushing = c.pushing;
     c.pushing = false;
@@ -624,7 +628,12 @@ void step_one(const JPH::PhysicsSystem &system, Character &c, double dt, uint32_
         return;
     }
     const double v0 = c.vy;
-    const double rise = c.fall(dt);
+    // A walker standing on walkable ground is given no fall: CharacterVirtual
+    // turns a velocity into a slope into motion along it, so a fall each tick
+    // would carry a walker at rest down any slope. Walking off an edge leaves
+    // the ground within the tick, and the fall starts on the next.
+    const bool resting = was_grounded && v0 <= 0.0 && c.walkable(c.ground_normal);
+    const double rise = resting ? 0.0 : c.fall(dt);
     const double impact = std::max(0.0, -c.vy);
     const JPH::Vec3 velocity =
         (horizontal + carried) * float(dt * per) + JPH::Vec3(0.0f, float(rise * per), 0.0f);
