@@ -824,8 +824,13 @@ mass or at a world point (`add_impulses` with `points`).
 Limits: a powered ragdoll's
 root spring stands in for balance, which nothing here computes from the feet;
 `save_state` holds the bodies and constraints, and the mode, strength, pose
-target and clip are the world thread's and are not saved. A world with a
-kinematic or powered ragdoll never counts quiet lockstep ticks.
+target and clip are the world thread's and are not saved.
+
+A ragdoll drives its bones while its pose target moves: a clip plays, a blend
+or a strength ramp runs, or the target changed in the last tick. At a still
+target kinematic bones stop and powered bones hold the pose until they fall
+asleep, after which they are left alone until a new target or a contact
+wakes them; a world of still ragdolls idles and counts quiet lockstep ticks.
 
 ## Soft bodies
 
