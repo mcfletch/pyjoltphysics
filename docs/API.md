@@ -364,8 +364,8 @@ asleep is in `changed` on that tick, with its final pose.
 
 | Field | Type | Meaning |
 |---|---|---|
-| `kind` | uint8 | `EventKind`: `CONTACT`, `TRIGGER`, `STATE`, `CHARACTER` or `JOINT` |
-| `phase` | uint8 | `EventPhase`: `BEGIN`, `PERSIST`, `END`, `SLEEP` or `WAKE`; for a character also `LAND`, `JUMP`, `SLIDE`, `DOWN` and `UP`; for a joint `END` and `BREAK` |
+| `kind` | uint8 | `EventKind`: `CONTACT`, `TRIGGER`, `STATE`, `CHARACTER`, `JOINT` or `VEHICLE` |
+| `phase` | uint8 | `EventPhase`: `BEGIN`, `PERSIST`, `END`, `SLEEP` or `WAKE`; for a character also `LAND`, `JUMP`, `SLIDE`, `DOWN` and `UP`; for a joint `END` and `BREAK`; for a vehicle `IMPACT` and `CRASH` |
 | `reason` | uint16 | `EndReason` of an end: `NONE`, or `REMOVED` when a body of the pair was removed |
 | `tick` | uint32 | the tick the event happened in: the tick of the first snapshot that shows it |
 | `a`, `b` | uint32 | uids: for a contact the lower uid first; for a trigger the sensor first; for sleep and wake the body, and 0; for a character the character, and the body or character it touched or landed on; for a joint the joint id, and for a break the joint's body |
@@ -620,6 +620,112 @@ caller that applies `knockback`.
 
 A character inside gravity zones falls by the vertical part of the gravity
 the zones leave from its own, at its capsule's centre.
+
+## Vehicles
+
+```python
+chassis = world.add_bodies(pj.BodyBatch.boxes([(0, 0.62, 0)], size=(1.85, 0.62, 4.2), mass=1180.0))[0][0]
+car = world.add_vehicle(chassis, pj.VehicleSettings(wheels=(
+    pj.WheelSettings((-0.85, 0.0, -1.3), steered=True, driven=False),
+    pj.WheelSettings((0.85, 0.0, -1.3), steered=True, driven=False),
+    pj.WheelSettings((-0.85, 0.0, 1.3), handbrake_torque=4000.0),
+    pj.WheelSettings((0.85, 0.0, 1.3), handbrake_torque=4000.0))))
+car.set_input(throttle=1.0, steer=0.2)       # held from the next tick until changed
+world.vehicle_inputs(ids, rows)              # (n, 4) throttle, steer, brake, handbrake
+rows = world.latest().vehicles               # VehicleRows; rows.wheels is WheelRows
+```
+
+A vehicle is Jolt's `VehicleConstraint` over a dynamic chassis body, with a
+`WheeledVehicleController` (`VehicleKind.WHEELED`), `MotorcycleController`
+(`MOTORCYCLE`) or `TrackedVehicleController` (`TRACKED`). Vehicle ids are
+assigned at submission, from 1, and never reused. A vehicle whose chassis is
+not a dynamic body when its batch is applied, or a tracked vehicle with a
+track holding no wheel, is skipped and counted in `stats()['rejected']`.
+Removing the chassis removes the vehicle; `remove_vehicles` leaves the
+chassis. `stats()['vehicles']` counts the vehicles in the world.
+
+Each tick, before `PhysicsSystem::Update`, the world thread turns each
+vehicle's inputs into the controller's: the steering lock falls with speed and
+the steer angle moves at `steer_rate`; an idle vehicle that comes down to
+`holding_speed` brakes with `holding` until it is driven again; `drag`,
+`downforce` and `rolling_resistance` act on the chassis for the step. Jolt
+casts the wheels (one step listener a vehicle, on its job system) and solves
+suspension, tyres and drivetrain with the other constraints, so the result
+does not depend on the job count.
+
+Inputs: `throttle` -1 to 1 (an automatic gearbox selects reverse below 0),
+`steer` -1 to 1 (positive turns left, a positive yaw about +Y), `brake` and
+`handbrake` 0 to 1. A tracked vehicle steers by slowing the inside track,
+which runs backwards past half a turn.
+
+`VehicleSettings` is plain data in SI units and the chassis's own frame:
+
+| Field | Meaning |
+|---|---|
+| `wheels` | `WheelSettings`: `position` (suspension mount), `radius`, `width`, `suspension_min`, `suspension_max`, `preload` (m), `stiffness` (N/m), `damping` (N s/m), `steered`, `driven`, `brake_torque`, `handbrake_torque` (N m), `inertia` (kg m2), `angular_damping`, `grip` (multiplies the friction curves), `track` (0 left, 1 right, -1 none) |
+| `kind` | `VehicleKind` |
+| `engine` | `Engine`: `max_torque` (N m), `min_rpm`, `max_rpm`, `torque_curve` ((rpm / max_rpm, fraction) points), `inertia`, `damping` |
+| `transmission` | `Transmission`: `automatic`, `gears`, `reverse_gears`, `switch_time`, `clutch_release_time`, `switch_latency` (s), `shift_up_rpm`, `shift_down_rpm`, `clutch_strength` |
+| `differentials` | `Differential(left, right, ratio, split, limited_slip, torque_ratio)`; None builds one per driven axle with `differential_ratio` and `differential_limited_slip` (inf: open) |
+| `anti_roll_bars` | `AntiRollBar(left, right, stiffness)` (N/m) |
+| `tracks` | (left, right) `VehicleTrack(driven_wheel, inertia, damping, brake_torque, ratio)` |
+| `lean` | `Lean(max_angle, spring, damping, integration, integration_decay, smoothing)`: a motorcycle's |
+| `forward`, `up` | the chassis's axes; default -Z and +Y |
+| `cast`, `cast_radius`, `max_slope` | `WheelCast.RAY`, `SPHERE` or `CYLINDER`; the sphere's radius (0: the smallest wheel's); the steepest ground a wheel stands on (rad) |
+| `max_pitch_roll` | rad from upright the chassis is held within; pi leaves it free |
+| `longitudinal_friction`, `lateral_friction` | (slip ratio, friction) and (slip angle in degrees, friction) points |
+| `body_friction` | the ground body's friction scales the tyre's as `sqrt(curve * friction)` (Jolt's combination) |
+| `max_steer`, `steer_falloff_speed`, `steer_rate` | the lock at rest (rad); the speed (m/s) where it has halved, as `max_steer / (1 + (v / falloff)^2)` (0: no falloff); rad/s the angle moves (0: at once) |
+| `drag`, `downforce` | N at 1 m/s, rising with the square of speed; downforce only with a wheel on the ground |
+| `rolling_resistance` | a fraction of each grounded wheel's load, against its rolling above 0.15 m/s |
+| `holding`, `holding_speed` | the idle hold above |
+| `impact_speed`, `crash_speed` | m/s closing speeds reported as `IMPACT` and `CRASH` records |
+
+`VehicleSettings.as_dict()` and `from_dict()` convert to and from builtin
+types for a scene file or a service. `VehicleSettings.from_raycast(tuning,
+wheels, mass, gravity=9.81)` maps omi_physics' `VehicleTuning` and
+`WheelSpec` list (any objects with those attributes); its docstring states
+the mapping field by field: suspension in car weights per metre and fractions
+of critical damping become N/m and N s/m; `engine_force` and `base_speed`
+become a one-gear drivetrain whose torque is flat to `base_speed` and constant
+power above; `brake_force` becomes brake torques; tyre curves saturate at full
+grip from a slip ratio of 0.05 and a slip angle of half a degree.
+
+What a wheel stands on. The casts use the chassis's collision layer, so its
+group, mask and filter decide what it meets; sensors and character proxies are
+never stood on. A wheel's grip and extra rolling resistance come from its own
+surface (`Vehicle.set_surface(grip, rolling, wheel=None)`, or
+`World.set_vehicle_surfaces`), or else from `World.set_surface_table(grip,
+rolling)` indexed by the material index of the body under it (grip 1 past
+the table). `set_surface(None)` gives the wheels back to the table.
+
+`Snapshot.vehicles` is a `VehicleRows`, a row a vehicle in ascending id: `id`,
+`chassis`, `kind`, `first_wheel`, `wheel_count`, `rpm`, `gear` (-1 reverse, 0
+neutral, 1 first), `forward_speed` (m/s), `steer` (rad), `impact_speed` (m/s),
+`impact_impulse` (N s), `impact_uid` (0 for none) and `input` (n, 4). Its
+`wheels` is a `WheelRows`, every wheel in vehicle order: `vehicle` (row),
+`position` (float64 centre), `orientation` (a wheel model with its axle along
+X and up along Y, to the world, steer and spin included), `length` and
+`compression` (m), `steer`, `angle` (rad), `spin` (rad/s), `load` (N), `slip`
+(longitudinal ratio, lateral angle in rad), `contact`, `ground` (uid),
+`material`, `triangle` (a mesh triangle's number, -1 elsewhere), `grip`,
+`contact_point` and `contact_normal`. `Vehicle` reads its own row:
+`forward_speed`, `rpm`, `gear`, `steer_angle`, `impact()` and
+`wheel_slice()`.
+
+Blows. After each step the contact records naming a chassis give its vehicle
+the heaviest blow of the tick: the largest closing speed among the `BEGIN`
+and `PERSIST` records (persist records only with `BodyFlag.REPORT` on the
+chassis or the other body), with that record's impulse and other body. One at
+or above `impact_speed` is also a record of kind `VEHICLE`, phase `IMPACT`
+(`CRASH` at or above `crash_speed`): `a` the vehicle, `b` the body struck,
+`approach` the closing speed, `impulse`, `point`, and `normal` from the
+chassis into `b`.
+
+A world with a vehicle never counts quiet lockstep ticks: an asleep vehicle's
+engine and wheels still change each tick. `save_state` holds Jolt's vehicle
+state; the steer angle and holding latch are the world thread's and are not
+saved.
 
 ## Joints
 
@@ -882,7 +988,8 @@ before the first tick; `grid(count, spacing, y0)`, grid
 positions; `pose_digest(snapshot, digest)`, a hashlib object updated with a
 snapshot's uids and poses in uid order; `character_digest(snapshot, digest)`,
 the same with every character's id, position, velocity, state, ground and
-slide progress after the poses; `MakeWorld`, the type of the suites'
+slide progress after the poses; `vehicle_digest(snapshot, digest)`, the same
+with every vehicle's rpm, gear, steer, impact and wheel state; `MakeWorld`, the type of the suites'
 `make_world` fixture.
 
 ## Build information

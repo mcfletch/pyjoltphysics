@@ -53,7 +53,12 @@ modes, with an (M, M) pair table and static friction below a slip speed.
 Collision filters are an (F, F) table changeable at run time. A Python
 contact filter is asked on Jolt's job threads about pairs that opted in.
 Gravity zones (box, sphere or shape regions; directional or point fields),
-quadratic drag and kinematic tracks run natively each tick.
+quadratic drag and kinematic tracks run natively each tick. Vehicles are
+Jolt's vehicle constraint with a wheeled, motorcycle or tracked controller
+(suspension, tyre curves, engine, gearbox, differentials, anti-roll bars),
+driven by input batches and read from the snapshot with every wheel's pose,
+load, slip and the surface under it; ten cars step in 0.05 ms a tick.
+`VehicleSettings.from_raycast` maps omi_physics' raycast vehicle tuning.
 `docs/API.md` describes every call.
 
 The build information:
@@ -124,6 +129,7 @@ The C++ is `src/_native.cpp` (the module and its build information) and
 `commands` and `apply` (batches), `snapshot`, `events`, `callbacks` (Python on
 the world thread), `layers` (collision groups), `shapes`, `queries` (rays,
 sweeps, overlaps), `characters` (the controller over `CharacterVirtual`),
+`vehicles` (the vehicle constraint and its inputs, forces and blows),
 `seams` (edge removal across static bodies laid flush) and `bind_world` (the
 nanobind classes).
 
@@ -153,6 +159,7 @@ tox -e asan         # the suite against an AddressSanitizer and UBSan build (Lin
 python benchmarks/boxes5000.py --threads 1 8
 python benchmarks/statics.py --threads 1 8
 python benchmarks/characters.py --threads 1 8     # characters, tile streaming, rays, query waits
+python benchmarks/vehicles.py --threads 1 8       # ten cars on a height field
 ```
 
 `tests/differential/` runs each scene through Jolt and through `omi_physics`
@@ -160,7 +167,9 @@ and compares them within the tolerance each test states: shapes resting on
 box, mesh and height field grounds, slides by friction, bounces, stacks, a
 pyramid, stairs, triggers, continuous detection, a bin of 1,000 boxes, a
 compound, and characters (a run across a height field, stairs, slopes, a jump
-at gravity 42, a fall) against omi_physics' controller. It is marked `differential` and skipped where `omi_physics` is not
+at gravity 42, a fall) against omi_physics' controller, and glisteel's car
+(settling, acceleration, braking, cornering, a jump, a wall, a banked road,
+bumps) against omi_physics' raycast vehicle. It is marked `differential` and skipped where `omi_physics` is not
 installed.
 
 ## Licence

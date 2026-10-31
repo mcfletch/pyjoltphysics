@@ -43,6 +43,9 @@
 - A quiet lockstep world (nothing awake or acting, two ticks with no batch and no contact report) counts `run_ticks` ticks without stepping; `stats()['quiet_ticks']`.
 - `Snapshot.rows_of` looks uids up in an array indexed by uid.
 - A character standing or knocked down on walkable ground, with no move asked for, stays where it is; a `BEGIN` record's `approach` and `impulse` measure the closing speed against the character's velocity of the tick before.
+- Vehicles: Jolt's `VehicleConstraint` with wheeled, motorcycle and tracked controllers on a dynamic chassis: `World.add_vehicle`, `remove_vehicles`, `vehicle_inputs`, `set_vehicle_surfaces`, `set_surface_table`; `Vehicle`, `VehicleSettings` (`WheelSettings`, `Engine`, `Transmission`, `Differential`, `AntiRollBar`, `VehicleTrack`, `Lean`, `VehicleKind`, `WheelCast`), `as_dict`, `from_dict` and `from_raycast`; `Snapshot.vehicles` (`VehicleRows`, `WheelRows`); steer falloff and rate, holding brake, drag, downforce, rolling resistance and surfaces by wheel or material.
+- Event kind `VEHICLE` with phases `IMPACT` and `CRASH`: a vehicle's heaviest blow of a tick.
+- `stats()['vehicles']`; `pyjoltphysics.testing.vehicle_digest`.
 
 - `jolt_version()`, `build_options()` and `selftest()` over the compiled module `pyjoltphysics._native`.
 - Jolt Physics v5.6.0 (commit e77f1755), double precision, cross-platform deterministic, SSE4.2 floor on x86-64.
