@@ -128,7 +128,7 @@ skipped and counted in `stats()['rejected']`.
 | `set_body_materials(uids, material)` | material indices (below) |
 | `set_body_filters(uids, filters)` | collision filter indices (below) |
 | `set_drag(uids, drag)` | quadratic drag coefficients, 1/m |
-| `set_motion(uids, mass=None, linear_damping=None, angular_damping=None, gravity_factor=None)` | moving bodies' motion properties; None, or NaN in an array, keeps a value; a new mass scales the inertia with it; changed dynamic bodies wake |
+| `set_motion(uids, mass=None, linear_damping=None, angular_damping=None, gravity_factor=None, inertia=None)` | moving bodies' motion properties; None, or NaN in an array, keeps a value; a new mass scales the inertia with it; `inertia` is a 3x3 tensor in kg m2 about the centre of mass in the body's frame, one for every body or (n, 3, 3), applied after the mass, its diagonal above 0; changed dynamic bodies wake |
 | `set_flags(uids, flags, on)` | set or clear `BodyFlag.REPORT`, `NO_SLEEP` and `FILTER_CONTACTS`, the flags that change after a body is added |
 | `restore_state(data)` | read a `save_state()` back into the bodies and joints (below) |
 

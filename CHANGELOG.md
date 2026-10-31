@@ -33,6 +33,10 @@
 - Kinematic tracks (`Track`, `World.set_track`, `clear_tracks`), `World.drive` and `World.move_kinematic`.
 - `CharacterRows.previous`, `eye`, `ground_material`, `stuck`; character touches of other characters; a struck body's momentum as the begin record's `impulse`.
 - `pyjoltphysics.testing.latest`; `floor()` takes batch fields.
+- `World.set_motion` (mass, damping, gravity factor, inertia tensor), `set_flags` (`REPORT`, `NO_SLEEP`, `FILTER_CONTACTS`), `save_state` and `restore_state`.
+- `WorldSettings.penetration_slop`; `World.flush`, which applies due batches and publishes without stepping; `World.bodies_state`; `World.triangle_of` and `Shape.mesh(ids=)`; `MaterialTable.pairing`; `set_contact_filter(either=, recheck=)`; `Shape.box(rounding=)`.
+- Commands from `before_step`, `at_tick` and `drive` code apply in the tick that called them; snapshot history is kept by publish, so several publishes in a tick stay distinct.
+- The event record is 72 bytes, with the contact `depth`.
 
 - `jolt_version()`, `build_options()` and `selftest()` over the compiled module `pyjoltphysics._native`.
 - Jolt Physics v5.6.0 (commit e77f1755), double precision, cross-platform deterministic, SSE4.2 floor on x86-64.
