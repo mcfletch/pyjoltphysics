@@ -1,5 +1,7 @@
 #include "world.h"
 
+#include "seams.h"
+
 #include <Jolt/Core/JobSystemSingleThreaded.h>
 #include <Jolt/Core/JobSystemThreadPool.h>
 #include <Jolt/Physics/Body/BodyLock.h>
@@ -56,6 +58,11 @@ WorldCore::WorldCore(const WorldSettings &settings)
     collector_.filter = this;
     system_.AddStepListener(&fields_);
     system_.SetContactListener(&collector_);
+    system_.SetSimCollideBodyVsBody([this](const JPH::Body &moving, const JPH::Body &other, JPH::Mat44Arg first,
+                                           JPH::Mat44Arg second, JPH::CollideShapeSettings &settings,
+                                           JPH::CollideShapeCollector &collector, const JPH::ShapeFilter &filter) {
+        collide_across_seams(system_, moving, other, first, second, settings, collector, filter);
+    });
     system_.SetBodyActivationListener(&collector_);
     row_of_index_.assign(settings.max_bodies, kNoRow);
     characters_ = std::make_unique<CharacterSystem>(system_, layers_, settings.threads);

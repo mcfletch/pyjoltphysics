@@ -308,16 +308,24 @@ def test_event_points_keep_millimetres_five_kilometres_out(make_world: MakeWorld
     np.testing.assert_allclose(begin['point'], (far, 0.0, far), atol=2e-3)
 
 
-def test_persist_records_carry_no_impulse(make_world: MakeWorld) -> None:
-    world = make_world(threads=1, allow_sleeping=False)
+def test_persist_records_carry_the_impulse_estimated_for_their_tick(make_world: MakeWorld) -> None:
+    world = make_world(threads=1, allow_sleeping=False, tick_hz=60.0)
     world.add_bodies(floor())
-    world.add_bodies(BodyBatch.boxes([(0.0, 2.0, 0.0)], flags=BodyFlag.REPORT))
-    world.run_ticks(120)
-    events = world.drain_events()
-    assert of(events, EventKind.CONTACT, EventPhase.BEGIN)['impulse'][0] > 0.0
-    persists = of(events, EventKind.CONTACT, EventPhase.PERSIST)
-    assert len(persists) > 0
-    assert (persists['impulse'] == 0.0).all()
+    (box,), _ = world.add_bodies(
+        BodyBatch.boxes([(0.0, 0.5, 0.0)], mass=2.0, flags=BodyFlag.REPORT)
+    )
+    world.run_ticks(60)
+    world.drain_events()
+    world.run_ticks(10)
+    resting = of(world.drain_events(), EventKind.CONTACT, EventPhase.PERSIST)['impulse']
+    # Holding 2 kg up for a tick of 1/60 s is its weight times the tick.
+    assert len(resting) == 10
+    np.testing.assert_allclose(resting, 2.0 * 9.81 / 60.0, rtol=0.25)
+    world.set_velocities([box], [(0.0, -3.0, 0.0)], [(0.0, 0.0, 0.0)])
+    world.run_ticks(1)
+    pressed = of(world.drain_events(), EventKind.CONTACT, EventPhase.PERSIST)['impulse']
+    # Stopping 2 kg closing at 3 m/s.
+    assert pressed.max() > 2.0 * 3.0 * 0.9
 
 
 def test_a_resting_contact_reports_how_far_the_bodies_overlap(make_world: MakeWorld) -> None:

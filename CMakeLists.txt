@@ -81,6 +81,7 @@ set(PYJOLTPHYSICS_SOURCES
   src/native/layers.cpp
   src/native/materials.cpp
   src/native/queries.cpp
+  src/native/seams.cpp
   src/native/shapes.cpp
   src/native/snapshot.cpp
   src/native/world.cpp)

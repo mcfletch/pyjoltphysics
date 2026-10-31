@@ -38,6 +38,8 @@
 - Commands from `before_step`, `at_tick` and `drive` code apply in the tick that called them; snapshot history is kept by publish, so several publishes in a tick stay distinct.
 - The event record is 72 bytes, with the contact `depth`.
 - `stats()`: `events_held`, the records the ring holds until the next drain.
+- `BodyFlag.SMOOTH_EDGES` on a moving body removes the seams between static bodies laid flush.
+- Contact persist records carry the impulse estimated for their tick.
 - A quiet lockstep world (nothing awake or acting, two ticks with no batch and no contact report) counts `run_ticks` ticks without stepping; `stats()['quiet_ticks']`.
 - `Snapshot.rows_of` looks uids up in an array indexed by uid.
 - A character standing or knocked down on walkable ground, with no move asked for, stays where it is; a `BEGIN` record's `approach` and `impulse` measure the closing speed against the character's velocity of the tick before.

@@ -294,9 +294,15 @@ can be pushed sideways. A static body whose shape holds a mesh or a height
 field has Jolt's enhanced internal edge removal, which merges those contacts
 with the faces beside them; `BodyFlag.NO_SMOOTH_EDGES` turns it off for such a
 body, and `BodyFlag.SMOOTH_EDGES` turns it on for any other (it then applies to
-every pair the body is in). It works within one body: the ball rolls flat
-across one field and still rides up to 6 mm at a seam between two tile
-bodies. Its cost did not show in the benchmarks: 5,000 boxes on the 20,000
+every pair the body is in). On a moving body it also works across the seams
+between static bodies laid flush: the pair's contacts are made together with
+those of every static body beside the moving one that it collides with, and an
+edge lying on a face it rests on, of whichever body, is no contact; an edge
+contact that remains on an edge shared with a face of another body in the same
+plane takes that plane's normal. A ball of 0.5 m crossing 4 m static boxes laid
+flush is kicked up at their seams at up to 3.4 m/s at 28 m/s without the flag,
+and at up to 1.1 m/s with it (1.1 and 0.6 m/s at 14 m/s). Without the flag on the moving body the ball rides up to
+6 mm at a seam between two height field tile bodies. Its cost did not show in the benchmarks: 5,000 boxes on the 20,000
 triangle mesh took 3.12 ms a frame with it and 3.24 ms without on 1 job
 thread, and 300 characters on a height field 1.49 and 1.51 ms.
 
@@ -319,7 +325,7 @@ mass.
 | `CONTINUOUS` | continuous collision detection (Jolt's linear cast), for small fast bodies |
 | `REPORT` | persist events, once a tick, for every pair the body touches |
 | `MOVABLE` | a static body a later `set_motion_types` may make kinematic or dynamic; needs a mass or density |
-| `SMOOTH_EDGES` | Jolt's enhanced internal edge removal: contacts with the inner edges of a mesh, height field or compound merge with the faces beside them; a static mesh or height field has it without the flag |
+| `SMOOTH_EDGES` | Jolt's enhanced internal edge removal: contacts with the inner edges of a mesh, height field or compound merge with the faces beside them; a static mesh or height field has it without the flag; on a moving body it also removes the seams between static bodies laid flush |
 | `NO_SMOOTH_EDGES` | a static mesh or height field without enhanced internal edge removal |
 | `FILTER_CONTACTS` | the world's contact filter is asked about pairs where both bodies carry it |
 
@@ -366,16 +372,17 @@ asleep is in `changed` on that tick, with its final pose.
 | `point` | 3 float64 | world contact point, m (begin and persist) |
 | `normal` | 3 float32 | unit vector from `a` to `b` (contact begin and persist) |
 | `approach` | float32 | closing speed along the normal at the point, m/s, positive when approaching |
-| `impulse` | float32 | estimated normal impulse, N s, in contact begin records; in a character begin, the momentum of a dynamic body striking it (N s); a joint break's torque, N m; 0 in every other record |
+| `impulse` | float32 | estimated normal impulse, N s, in contact begin and persist records; in a character begin, the momentum of a dynamic body striking it (N s); a joint break's torque, N m; 0 in every other record |
 | `material_a`, `material_b` | uint16 | contact begin and persist: the material index of each side, a mesh triangle's own where it has one |
 | `depth` | float32 | contact begin and persist: how far the two bodies overlap, m |
 | `reserved` | uint32 | 0 |
 
 A record's simulation time is `tick / tick_hz`; `event_times(events, tick_hz)`
 computes it. The impulse is Jolt's `EstimateCollisionResponse` for the two
-bodies alone. Jolt calls its contact listeners before its solver runs, so no
-record carries the impulse the solver applied, and a persist record's
-impulse is 0. The point is float64, as body positions are, so it keeps the
+bodies alone, at the start of the record's tick: on a persist record, the
+impulse that stops the bodies closing in that tick (a resting body's weight
+times the tick). Jolt calls its contact listeners before its solver runs, so no
+record carries the impulse the solver applied. The point is float64, as body positions are, so it keeps the
 same precision at any distance from the origin.
 
 The world folds Jolt's per-sub-shape reports into one record per body pair:

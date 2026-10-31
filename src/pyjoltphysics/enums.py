@@ -80,7 +80,8 @@ class BodyFlag(enum.IntFlag):
     #: a mesh, height field or compound are merged with the faces beside them,
     #: so a body sliding across them does not catch on an edge. A static mesh
     #: or height field has it without the flag; on a moving body it applies
-    #: to every pair the body is in.
+    #: to every pair the body is in, and to the seams between static bodies
+    #: laid flush beside each other.
     SMOOTH_EDGES = 1 << 5
     #: A static mesh or height field without enhanced internal edge removal.
     NO_SMOOTH_EDGES = 1 << 6

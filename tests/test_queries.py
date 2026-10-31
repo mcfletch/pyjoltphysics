@@ -194,6 +194,8 @@ def test_queries_from_many_threads_beside_a_free_running_world(make_world: MakeW
     rng = np.random.default_rng(3)
     world.add_bodies(BodyBatch.boxes(rng.uniform(-10, 10, (500, 3)) + (0, 12, 0), size=(0.4,) * 3))
     world.start()
+    # A query sees what the world has applied: the bodies are in from its first tick.
+    assert world.wait_tick(1, 5.0)
     errors: list[BaseException] = []
     counts = [0] * 6
 

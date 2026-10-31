@@ -123,8 +123,9 @@ The C++ is `src/_native.cpp` (the module and its build information) and
 `src/native/`, a file per concern: `world` (the thread and the tick),
 `commands` and `apply` (batches), `snapshot`, `events`, `callbacks` (Python on
 the world thread), `layers` (collision groups), `shapes`, `queries` (rays,
-sweeps, overlaps), `characters` (the controller over `CharacterVirtual`) and
-`bind_world` (the nanobind classes).
+sweeps, overlaps), `characters` (the controller over `CharacterVirtual`),
+`seams` (edge removal across static bodies laid flush) and `bind_world` (the
+nanobind classes).
 
 An editable install keeps a build directory per wheel tag under `build/`, so
 reinstalling after a change to a source file recompiles that file only:

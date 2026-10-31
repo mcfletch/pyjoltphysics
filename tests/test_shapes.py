@@ -271,6 +271,48 @@ def test_smooth_edges_flatten_one_field_and_leave_the_seams_between_tiles(
     assert np.abs(tiled[:, 1] - 0.25).max() < 0.01
 
 
+def kicked_up(
+    make_world: MakeWorld, flags: BodyFlag, tiles: int = 10, speed: float = 28.0
+) -> float:
+    """Roll a ball at ``speed`` across ``tiles`` static 4 m boxes laid flush in a row, each a body
+    of its own; return the fastest it ever moved upward, m/s."""
+    world = make_world(threads=1, penetration_slop=0.005)
+    world.add_bodies(
+        BodyBatch.boxes(
+            [(0.0, -0.5, 4.0 * n) for n in range(tiles)],
+            size=(4.0, 1.0, 4.0),
+            motion=MotionType.STATIC,
+        )
+    )
+    (ball,), _ = world.add_bodies(
+        BodyBatch.spheres([(0.0, 0.5, 0.0)], radius=0.5, mass=3.0, flags=flags)
+    )
+    world.set_velocities([ball], [(0.0, 0.0, speed)], [(0.0, 0.0, 0.0)])
+    upward = 0.0
+    for _ in range(int(4.0 * tiles / speed * 120)):
+        world.run_ticks(1)
+        snapshot = world.latest()
+        assert snapshot is not None
+        upward = max(upward, float(snapshot.linear_velocity[snapshot.rows[int(ball)], 1]))
+    return upward
+
+
+def test_a_ball_is_kicked_up_at_the_seam_between_two_static_bodies_laid_flush(
+    make_world: MakeWorld,
+) -> None:
+    assert kicked_up(make_world, BodyFlag.NONE) > 1.0
+
+
+@pytest.mark.parametrize('speed', [14.0, 28.0])
+def test_smooth_edges_on_the_ball_remove_most_of_the_kick_at_a_seam_between_static_bodies(
+    make_world: MakeWorld, speed: float
+) -> None:
+    # 0.59 m/s against 1.11 at 14 m/s, 1.11 against 3.41 at 28: what is left is
+    # the tick that begins the next body's contact with the ball on the seam.
+    smooth = kicked_up(make_world, BodyFlag.SMOOTH_EDGES, speed=speed)
+    assert smooth < 0.6 * kicked_up(make_world, BodyFlag.NONE, speed=speed)
+
+
 # -- compounds -----------------------------------------------------------------
 
 

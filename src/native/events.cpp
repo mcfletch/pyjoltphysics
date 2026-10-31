@@ -50,7 +50,7 @@ void Collector::record(const JPH::Body &body1, const JPH::Body &body2,
     raw.approach = closing.Dot(manifold.mWorldSpaceNormal);
     raw.depth = manifold.mPenetrationDepth;
 
-    if (type == RawContact::Added && !raw.sensors && (body1.IsDynamic() || body2.IsDynamic())) {
+    if (!raw.sensors && (body1.IsDynamic() || body2.IsDynamic())) {
         JPH::CollisionEstimationResult result;
         JPH::EstimateCollisionResponse(body1, body2, manifold, result, settings.mCombinedFriction,
                                        settings.mCombinedRestitution,
