@@ -179,11 +179,17 @@ def test_either_asks_where_one_body_carries_the_flag(make_world: MakeWorld) -> N
         return False
 
     world.set_contact_filter(verdict, either=True)
-    (wall,), _ = world.add_bodies(BodyBatch.boxes([(0.0, 0.0, 0.0)], size=(0.2, 4.0, 4.0),
-                                                  motion=MotionType.STATIC,
-                                                  flags=BodyFlag.FILTER_CONTACTS))
-    (ball,), _ = world.add_bodies(BodyBatch.spheres([(-2.0, 0.0, 0.0)], radius=0.25,
-                                                    linear_velocity=(5.0, 0.0, 0.0)))
+    (wall,), _ = world.add_bodies(
+        BodyBatch.boxes(
+            [(0.0, 0.0, 0.0)],
+            size=(0.2, 4.0, 4.0),
+            motion=MotionType.STATIC,
+            flags=BodyFlag.FILTER_CONTACTS,
+        )
+    )
+    (ball,), _ = world.add_bodies(
+        BodyBatch.spheres([(-2.0, 0.0, 0.0)], radius=0.25, linear_velocity=(5.0, 0.0, 0.0))
+    )
     world.run_ticks(60)
     assert asked == [(wall, ball)] or asked == [(min(wall, ball), max(wall, ball))]
     snap = latest(world)
@@ -201,8 +207,9 @@ def test_recheck_asks_a_refused_pair_again(make_world: MakeWorld) -> None:
 
     world.set_contact_filter(verdict, recheck=True)
     world.add_bodies(floor(10.0, flags=BodyFlag.FILTER_CONTACTS))
-    (ball,), _ = world.add_bodies(BodyBatch.spheres([(0.0, 0.5, 0.0)], radius=0.5,
-                                                    flags=BodyFlag.FILTER_CONTACTS))
+    (ball,), _ = world.add_bodies(
+        BodyBatch.spheres([(0.0, 0.5, 0.0)], radius=0.5, flags=BodyFlag.FILTER_CONTACTS)
+    )
     world.run_ticks(5)
     assert len(asked) >= 4
     allowed.set()

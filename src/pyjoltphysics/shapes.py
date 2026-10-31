@@ -174,7 +174,9 @@ class Shape:
         if ids is not None:
             numbers = np.array(ids, dtype=np.uint32, copy=True).reshape(-1)
             if len(numbers) != len(indices):
-                raise ValueError('ids has %d entries for %d triangles' % (len(numbers), len(indices)))
+                raise ValueError(
+                    'ids has %d entries for %d triangles' % (len(numbers), len(indices))
+                )
             numbers.flags.writeable = False
         return cls(
             ShapeKind.MESH,

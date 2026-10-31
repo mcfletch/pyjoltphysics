@@ -1004,8 +1004,9 @@ class World:
         if inertia is not None:
             given = np.asarray(inertia, dtype=np.float32)
             if given.shape not in ((3, 3), (n, 3, 3)):
-                raise ValueError('inertia is a 3x3 tensor or one a body, not shape %s'
-                                 % (given.shape,))
+                raise ValueError(
+                    'inertia is a 3x3 tensor or one a body, not shape %s' % (given.shape,)
+                )
             tensors[:] = given.reshape(-1, 9)
 
         return self._native.set_motion(
@@ -1022,7 +1023,9 @@ class World:
         """Queue setting (``on``) or clearing ``flags`` on bodies: ``REPORT``, ``NO_SLEEP`` and ``FILTER_CONTACTS``."""
         bits = int(flags)
         if bits & ~int(BodyFlag.REPORT | BodyFlag.NO_SLEEP | BodyFlag.FILTER_CONTACTS):
-            raise ValueError('only REPORT, NO_SLEEP and FILTER_CONTACTS change after a body is added')
+            raise ValueError(
+                'only REPORT, NO_SLEEP and FILTER_CONTACTS change after a body is added'
+            )
         return self._native.set_flags(_uids(uids), bits, bool(on), at_tick)
 
     def bodies_state(self, uids: npt.ArrayLike) -> BodiesState:
@@ -1032,9 +1035,12 @@ class World:
         batches, before its step); from another thread it takes the world
         lock's shared side, as a query does.
         """
-        position, orientation, linear, angular, awake, found = self._native.bodies_state(_uids(uids))
-        return BodiesState(position, orientation, linear, angular, awake.astype(bool),
-                           found.astype(bool))
+        position, orientation, linear, angular, awake, found = self._native.bodies_state(
+            _uids(uids)
+        )
+        return BodiesState(
+            position, orientation, linear, angular, awake.astype(bool), found.astype(bool)
+        )
 
     def triangle_of(self, uid: int, sub_shape: int) -> int:
         """The number of the mesh triangle a query's ``sub_shape`` names on body ``uid``; -1 for another part.
