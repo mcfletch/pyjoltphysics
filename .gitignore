@@ -14,3 +14,9 @@ __pycache__/
 .coverage.*
 htmlcov/
 uv.lock
+
+# Claude Code's machine-local state: the worktrees are checkouts of this
+# repository, which ruff would lint and git would record as embedded repos.
+.claude/settings.local.json
+.claude/worktrees/
+.claude/scheduled_tasks.lock
