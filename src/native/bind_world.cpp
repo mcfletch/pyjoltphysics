@@ -1387,12 +1387,12 @@ void bind_world(nb::module_ &m) {
                     w.core().bodies_state(ids.data(), n, position.data(), orientation.data(), linear.data(),
                                           angular.data(), awake.data(), found.data());
                 }
-                return nb::make_tuple(owned<double, nb::shape<-1, 3>>(std::move(position), {n, 3}),
-                                      owned<float, nb::shape<-1, 4>>(std::move(orientation), {n, 4}),
-                                      owned<float, nb::shape<-1, 3>>(std::move(linear), {n, 3}),
-                                      owned<float, nb::shape<-1, 3>>(std::move(angular), {n, 3}),
-                                      owned<uint8_t, nb::shape<-1>>(std::move(awake), {n}),
-                                      owned<uint8_t, nb::shape<-1>>(std::move(found), {n}));
+                return std::make_tuple(owned<double, nb::shape<-1, 3>>(std::move(position), {n, 3}),
+                                       owned<float, nb::shape<-1, 4>>(std::move(orientation), {n, 4}),
+                                       owned<float, nb::shape<-1, 3>>(std::move(linear), {n, 3}),
+                                       owned<float, nb::shape<-1, 3>>(std::move(angular), {n, 3}),
+                                       owned<uint8_t, nb::shape<-1>>(std::move(awake), {n}),
+                                       owned<uint8_t, nb::shape<-1>>(std::move(found), {n}));
             },
             nb::arg("uids"),
             "Each body's position, orientation, velocities, awake and found, as Jolt holds it now.")

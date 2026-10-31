@@ -271,10 +271,6 @@ class BodiesState:
     awake: npt.NDArray[np.bool_]
     found: npt.NDArray[np.bool_]
 
-    def __post_init__(self) -> None:
-        object.__setattr__(self, 'awake', np.asarray(self.awake, dtype=bool))
-        object.__setattr__(self, 'found', np.asarray(self.found, dtype=bool))
-
 
 class World:
     """A Jolt physics world, stepped on a native thread the world owns.
@@ -1011,7 +1007,9 @@ class World:
         batches, before its step); from another thread it takes the world
         lock's shared side, as a query does.
         """
-        return BodiesState(*self._native.bodies_state(_uids(uids)))
+        position, orientation, linear, angular, awake, found = self._native.bodies_state(_uids(uids))
+        return BodiesState(position, orientation, linear, angular, awake.astype(bool),
+                           found.astype(bool))
 
     def triangle_of(self, uid: int, sub_shape: int) -> int:
         """The number of the mesh triangle a query's ``sub_shape`` names on body ``uid``; -1 for another part.

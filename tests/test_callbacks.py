@@ -55,19 +55,27 @@ def test_callbacks_run_in_order_on_the_world_thread(make_world: MakeWorld) -> No
     assert len(threads) == 1
 
 
-def test_a_command_from_a_callback_applies_at_the_next_tick(make_world: MakeWorld) -> None:
+def test_a_command_from_before_step_applies_in_its_tick_and_from_after_step_at_the_next(
+    make_world: MakeWorld,
+) -> None:
     world = make_world(threads=1, gravity=(0.0, 0.0, 0.0))
     (ball,), _ = world.add_bodies(BodyBatch.spheres([(0.0, 0.0, 0.0)]))
-    seqs: dict[int, int] = {}
+    seqs: dict[str, int] = {}
 
     def push(tick: int, now: float) -> None:
         if tick == 5:
-            seqs[tick] = world.set_velocities([ball], linear=(1.0, 0.0, 0.0))
+            seqs['before'] = world.set_velocities([ball], linear=(1.0, 0.0, 0.0))
+
+    def pull(tick: int, now: float) -> None:
+        if tick == 7:
+            seqs['after'] = world.set_velocities([ball], linear=(0.0, 0.0, 0.0))
 
     world.set_before_step(push)
+    world.set_after_step(pull)
     world.run_ticks(10)
     applied = dict(map(tuple, world.drain_applied().tolist()))
-    assert applied[seqs[5]] == 6
+    assert applied[seqs['before']] == 5
+    assert applied[seqs['after']] == 7
 
 
 def test_a_raising_callback_stops_the_world_and_fails_its_waiters(

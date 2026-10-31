@@ -247,7 +247,7 @@ class World:
 
     def set_flags(self, uids: Annotated[NDArray[numpy.uint32], dict(shape=(None,), order='C', device='cpu', writable=False)], bits: int, on: bool, at_tick: int = 0) -> int: ...
 
-    def bodies_state(self, uids: Annotated[NDArray[numpy.uint32], dict(shape=(None,), order='C', device='cpu', writable=False)]) -> tuple:
+    def bodies_state(self, uids: Annotated[NDArray[numpy.uint32], dict(shape=(None,), order='C', device='cpu', writable=False)]) -> tuple[Annotated[NDArray[numpy.float64], dict(shape=(None, 3))], Annotated[NDArray[numpy.float32], dict(shape=(None, 4))], Annotated[NDArray[numpy.float32], dict(shape=(None, 3))], Annotated[NDArray[numpy.float32], dict(shape=(None, 3))], Annotated[NDArray[numpy.uint8], dict(shape=(None,))], Annotated[NDArray[numpy.uint8], dict(shape=(None,))]]:
         """
         Each body's position, orientation, velocities, awake and found, as Jolt holds it now.
         """
