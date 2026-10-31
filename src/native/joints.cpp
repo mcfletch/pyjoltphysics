@@ -94,20 +94,20 @@ void drive(JPH::Constraint &constraint, JointKind kind, int axis, uint8_t mode, 
         six.SetMotorState(which, motor_state(mode));
         if (axis < 3) {
             JPH::Vec3 velocity = six.GetTargetVelocityCS(), position = six.GetTargetPositionCS();
-            velocity.SetComponent(uint(axis), float(target));
-            position.SetComponent(uint(axis), float(target));
+            velocity.SetComponent(JPH::uint(axis), float(target));
+            position.SetComponent(JPH::uint(axis), float(target));
             if (mode == uint8_t(MotorMode::Velocity))
                 six.SetTargetVelocityCS(velocity);
             else if (mode == uint8_t(MotorMode::Position))
                 six.SetTargetPositionCS(position);
         } else {
             JPH::Vec3 velocity = six.GetTargetAngularVelocityCS();
-            velocity.SetComponent(uint(axis - 3), float(target));
+            velocity.SetComponent(JPH::uint(axis - 3), float(target));
             if (mode == uint8_t(MotorMode::Velocity)) {
                 six.SetTargetAngularVelocityCS(velocity);
             } else if (mode == uint8_t(MotorMode::Position)) {
                 JPH::Vec3 angles = six.GetTargetOrientationCS().GetEulerAngles();
-                angles.SetComponent(uint(axis - 3), float(target));
+                angles.SetComponent(JPH::uint(axis - 3), float(target));
                 six.SetTargetOrientationCS(JPH::Quat::sEulerAngles(angles));
             }
         }

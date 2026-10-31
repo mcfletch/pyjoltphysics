@@ -99,7 +99,7 @@ Every wheel is built with the same Jolt options.
 |---|---|---|
 | `double_precision` | `True` | `JPH_DOUBLE_PRECISION`: positions are 64-bit floats, where 32-bit ones resolve 0.98 mm between 8 and 16 km from the origin |
 | `cross_platform_deterministic` | `True` | `JPH_CROSS_PLATFORM_DETERMINISTIC`: the same inputs step to the same bits on x86-64 and arm64 |
-| `simd_level` | `'sse4.2'` on x86-64, `'neon'` on arm64 | x86-64 compiles SSE4.2 and POPCNT, with AVX, AVX2, F16C, FMA, LZCNT and TZCNT off |
+| `simd_level` | `'sse4.2'` on x86-64, `'neon'` on arm64 | x86-64 compiles SSE4.2 and POPCNT (`-march=x86-64-v2`, which every x86-64 CPU sold since 2009 has), with AVX, AVX2, F16C, FMA, LZCNT and TZCNT off |
 | `free_threaded` | `True` in the cp313t and cp314t wheels | nanobind's `FREE_THREADED`: importing the module leaves the GIL off |
 | `debug` | `False` | no `JPH_ENABLE_ASSERTS`, `NDEBUG` defined, no debug renderer or profiler |
 | `compiler` | such as `'gcc 14.2.1'` | the compiler that built the module |
@@ -117,7 +117,7 @@ pip install pyjoltphysics
 ```
 
 Wheels cover CPython 3.10 and 3.11, one abi3 wheel for CPython 3.12 and later,
-and free-threaded CPython 3.13t and 3.14t, on manylinux x86_64 and aarch64,
+and free-threaded CPython 3.13t and 3.14t, on manylinux and musllinux x86_64 and aarch64,
 macOS arm64 and x86_64, and Windows AMD64 and ARM64. The package needs NumPy.
 
 ## Build from source

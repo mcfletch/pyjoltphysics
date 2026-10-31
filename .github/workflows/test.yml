@@ -55,8 +55,8 @@ jobs:
   # A wheel per platform and interpreter, each installed and tested by
   # cibuildwheel in its own environment (`test-command` in pyproject.toml).
   #
-  #   ubuntu-latest     x86_64   manylinux_2_28
-  #   ubuntu-24.04-arm  aarch64  manylinux_2_28
+  #   ubuntu-latest     x86_64   manylinux_2_28 and musllinux_1_2
+  #   ubuntu-24.04-arm  aarch64  manylinux_2_28 and musllinux_1_2
   #   macos-latest      arm64    Apple silicon
   #   macos-15-intel    x86_64   Intel Macs; Jolt's CMake applies the x86 SIMD
   #                              flags to the whole build, so there is no

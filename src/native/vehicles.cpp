@@ -23,7 +23,7 @@ JPH::Vec3 vec(const std::vector<double> &p, uint32_t at) {
 
 void fill_curve(JPH::LinearCurve &curve, const std::vector<float> &pairs) {
     curve.Clear();
-    curve.Reserve(uint(pairs.size() / 2));
+    curve.Reserve(JPH::uint(pairs.size() / 2));
     for (size_t i = 0; i + 1 < pairs.size(); i += 2)
         curve.AddPoint(pairs[i], pairs[i + 1]);
 }
@@ -126,7 +126,7 @@ bool VehicleSystem::add(const VehicleDesc &desc, const JPH::BodyID &chassis) {
         fill_transmission(controller->mTransmission, desc);
         for (int side = 0; side < 2; ++side) {
             JPH::VehicleTrackSettings &track = controller->mTracks[side];
-            track.mDrivenWheel = uint(std::max(desc.tracks[side].driven, 0));
+            track.mDrivenWheel = JPH::uint(std::max(desc.tracks[side].driven, 0));
             track.mInertia = desc.tracks[side].inertia;
             track.mAngularDamping = desc.tracks[side].damping;
             track.mMaxBrakeTorque = desc.tracks[side].brake_torque;
@@ -141,7 +141,7 @@ bool VehicleSystem::add(const VehicleDesc &desc, const JPH::BodyID &chassis) {
             settings.mWheels.push_back(wheel);
             const int side = int(desc.wheel(i, kTrackSide));
             if (side == 0 || side == 1)
-                controller->mTracks[side].mWheels.push_back(uint(i));
+                controller->mTracks[side].mWheels.push_back(JPH::uint(i));
         }
         for (int side = 0; side < 2; ++side)
             if (controller->mTracks[side].mWheels.empty())
@@ -230,7 +230,7 @@ bool VehicleSystem::add(const VehicleDesc &desc, const JPH::BodyID &chassis) {
     vehicle->constraint->SetVehicleCollisionTester(vehicle->tester);
     const bool body_friction = p[kBodyFriction] != 0.0;
     Vehicle *raw = vehicle.get();
-    vehicle->constraint->SetCombineFriction([this, raw, body_friction](uint wheel, float &longitudinal, float &lateral,
+    vehicle->constraint->SetCombineFriction([this, raw, body_friction](JPH::uint wheel, float &longitudinal, float &lateral,
                                                                        const JPH::Body &ground, const JPH::SubShapeID &) {
         if (body_friction) {
             const float friction = ground.GetFriction();
@@ -507,7 +507,7 @@ void VehicleSystem::write(SnapshotBuffer &out) const {
         for (size_t i = 0; i < list.size(); ++i, ++w) {
             const JPH::Wheel *wheel = list[i];
             const JPH::WheelSettings *settings = wheel->GetSettings();
-            const JPH::RMat44 transform = v.constraint->GetWheelWorldTransform(uint(i), JPH::Vec3::sAxisX(),
+            const JPH::RMat44 transform = v.constraint->GetWheelWorldTransform(JPH::uint(i), JPH::Vec3::sAxisX(),
                                                                                JPH::Vec3::sAxisY());
             const JPH::RVec3 centre = transform.GetTranslation();
             const JPH::Quat q = transform.GetQuaternion().Normalized();

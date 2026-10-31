@@ -30,6 +30,19 @@ if(PYJOLTPHYSICS_SIMD_FLOOR_SSE42)
   foreach(isa USE_AVX USE_AVX2 USE_AVX512 USE_F16C USE_FMADD USE_LZCNT USE_TZCNT)
     set(${isa} OFF CACHE BOOL "" FORCE)
   endforeach()
+  # Jolt turns on whichever instruction sets the compiler already targets, so a
+  # toolchain whose default is wider than x86-64-v2 (a distribution compiler
+  # defaulting to v3, or -march=native in CXXFLAGS) would raise the floor past
+  # SSE4.2 whatever the options above say. x86-64-v2 is SSE4.2 and POPCNT, which
+  # every x86-64 CPU sold since 2009 has. It is set before Jolt is added so
+  # both the library and the binding take it.
+  if(NOT MSVC AND CMAKE_SYSTEM_PROCESSOR MATCHES "^(x86_64|AMD64|amd64)$")
+    include(CheckCXXCompilerFlag)
+    check_cxx_compiler_flag(-march=x86-64-v2 PYJOLTPHYSICS_HAS_X86_64_V2)
+    if(PYJOLTPHYSICS_HAS_X86_64_V2)
+      string(APPEND CMAKE_CXX_FLAGS " -march=x86-64-v2")
+    endif()
+  endif()
 endif()
 
 # A release wheel carries no assertions, debug renderer or profiler, and Jolt
