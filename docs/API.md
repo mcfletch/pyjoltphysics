@@ -110,7 +110,7 @@ A frozen dataclass; every field has a default.
 | `lockstep` | True unless `start()` is free-running the world |
 | `error` | the exception a callback raised, or None |
 | `submitted_seq` | the sequence number of the last batch submitted |
-| `stats()` | counters (`ticks`, `dropped_ticks`, `events_dropped`, `events_held` in the ring until the next drain, `rejected`, `pool`, `bodies` in the world, `queued_bodies` submitted and not yet applied, `shapes` registered, `broadphase_optimizations`, `idle`, `running`) `characters`, `queries` that waited for the world lock, and mean milliseconds a tick since `reset_stats()` (`apply_ms`, `characters_ms`, `step_ms`, `events_ms`, `publish_ms`, `callbacks_ms`, `tick_ms`), `quiet_ticks` counted without stepping since `reset_stats()`, with `query_wait_ms` and `query_wait_max_ms`, the mean and longest wait of a query for the world lock |
+| `stats()` | counters (`ticks`, `dropped_ticks`, `events_dropped`, `events_held` in the ring until the next drain, `rejected`, `pool`, `bodies` in the world, `queued_bodies` submitted and not yet applied, `shapes` registered, `broadphase_optimizations`, `idle`, `running`) `characters`, `vehicles`, `ragdolls`, `soft_bodies`, `queries` that waited for the world lock, and mean milliseconds a tick since `reset_stats()` (`apply_ms`, `characters_ms` (kinematic targets, characters, vehicles, ragdolls and soft bodies before the step), `step_ms`, `events_ms`, `publish_ms`, `callbacks_ms`, `tick_ms`), `quiet_ticks` counted without stepping since `reset_stats()`, with `query_wait_ms` and `query_wait_max_ms`, the mean and longest wait of a query for the world lock |
 
 ## Commands
 
@@ -727,6 +727,179 @@ engine and wheels still change each tick. `save_state` holds Jolt's vehicle
 state; the steer angle and holding latch are the world thread's and are not
 saved.
 
+## Ragdolls
+
+```python
+settings = pj.RagdollSettings.humanoid(root_force=4000.0, root_torque=1500.0)
+doll = world.add_ragdoll(settings, position=(0, 0, 0), mode=pj.RagdollMode.KINEMATIC)
+doll.play(times, rotations, translations, loop=True)   # (K,), (K, B, 4), (K, B, 3)
+doll.set_mode(pj.RagdollMode.LIMP, blend=0.3)          # on death: the motors fade over 0.3 s
+doll.hit(settings.bone_index('head'), (30.0, 0.0, 0.0))  # N s on one bone
+rows = world.latest().ragdolls                         # RagdollRows
+joints = rows.bone_position[rows.bones(0)]             # (B, 3) one slice a ragdoll
+```
+
+A ragdoll is Jolt's `Ragdoll`: one dynamic body a bone, each joined to its
+parent by a `SwingTwistConstraint`. A bone's body frame is its joint's frame,
+so the bone poses in the snapshot are the joint poses a renderer skins with.
+Ragdoll ids and the bones' uids are assigned at submission (ids from 1, never
+reused); each bone is a body row of every snapshot, so `add_impulses`,
+`set_velocities`, events, queries and joints name bones by uid.
+`remove_bodies` refuses a bone (counted in `stats()['rejected']`);
+`remove_ragdolls` removes the ragdoll and its bodies, its pairs ending with
+reason `REMOVED`. `stats()['ragdolls']` counts the ragdolls in the world.
+
+`RagdollSettings` holds the bones parents first, as `Bone(name, parent,
+translation, rotation, shape, shape_offset, shape_rotation, mass, twist_axis,
+plane_axis, twist, swing, strength, friction)`:
+
+| Field | Meaning |
+|---|---|
+| `parent` | index of the parent bone, -1 for the first and only for it |
+| `translation`, `rotation` | the rest pose in the parent joint's frame (the root's in the ragdoll's frame), as a glTF node's |
+| `shape`, `shape_offset`, `shape_rotation` | a `Shape` that can be dynamic, placed in the joint's frame |
+| `mass` | kg |
+| `twist_axis`, `plane_axis` | joint frame; None: towards the first child joint (or along the bone's own translation), and a direction square to it |
+| `twist`, `swing` | (min, max) twist about the twist axis; (normal, plane) half angles of the swing cone, rad |
+| `strength` | N m, the motors' torque limit when powered |
+| `friction` | N m holding the joint in every mode |
+
+The ragdoll's own fields: `self_collision` (bones collide with each other
+except a bone and its parent and bones whose shapes overlap in the rest pose;
+False: no bone pair collides), `motor_frequency` (Hz) and `motor_damping`,
+`root_frequency`, `root_damping`, `root_force` (N) and `root_torque` (N m) for
+the powered root (0: free), and `friction`, `restitution`, `linear_damping`,
+`angular_damping` (1/s), `gravity_factor`, `group`, `mask`, `filter`,
+`material` and `flags` for every bone's body. `RagdollSettings.from_skeleton(names,
+parents, translations, rotations=None, radius=0.05, mass=70.0)` gives each
+bone a capsule from its joint to its first child's (a leaf's 0.9 times its own
+translation long) and shares the mass by volume; `RagdollSettings.humanoid(height=1.8,
+mass=70.0)` is an 11-bone standing figure with limits for each joint.
+`as_dict()` and `from_dict()` convert to builtin types (primitive shapes only).
+`forward_kinematics(settings, rotations, position, rotation, translations=None)`
+returns the joint poses a pose target makes, the arithmetic the world thread
+uses.
+
+Modes (`RagdollMode`):
+
+- `KINEMATIC` - every bone is a kinematic body moved by `MoveKinematic` to the
+  pose target at the end of each tick; it pushes dynamic bodies and is not
+  pushed.
+- `POWERED` - dynamic bones; each joint's swing and twist motors turn its bone
+  towards the target rotation relative to its parent, with a spring of
+  `motor_frequency` and a torque limit of the bone's `strength`. With
+  `root_force` or `root_torque`, the root bone is pulled to its target pose by
+  a spring of `root_frequency` carrying the whole ragdoll's mass and weight,
+  limited to that force and torque, so a struck ragdoll stays up and returns
+  to its pose.
+- `LIMP` - dynamic bones, motors off; joint friction only.
+
+`set_mode(mode, blend=0.0)` (`World.set_ragdoll_modes(ids, mode, blend)`) blends
+over `blend` seconds: into powered or limp the motors' strength (`RagdollRows.strength`,
+0 to 1, scaling every bone's torque and the root's limits) moves linearly to 1
+or 0; leaving kinematic keeps the bones' velocities, at full strength; into
+kinematic the targets move from the bones' current poses to the pose target.
+`set_strength(strength)` sets each bone's torque limit.
+
+The pose target is the held pose, `set_pose(rotations, translations=None,
+position=None, rotation=None)` (local rotations (B, 4) and translations (B, 3)
+in each parent joint's frame; `position` and `rotation` place the ragdoll's
+frame; None keeps each), or a clip, `play(times, rotations, translations=None,
+loop=False)`, sampled at `times` seconds from the tick that applies it and
+evaluated natively at the end of every tick: rotations by slerp, translations
+linearly, holding the last pose past the end or looping. `place(position,
+rotation)` moves the frame alone; `stop()` clears the clip. A rig's pose
+(`OpenGLContext.character`'s translation (N, 3) and rotation (N, 4) arrays,
+parents first) is this layout.
+
+`Snapshot.ragdolls` is a `RagdollRows`, a row a ragdoll in ascending id: `id`,
+`mode`, `strength`, `self_collision`, `first_bone` and `bone_count`; and every
+bone in ragdoll order: `bone_uid`, `bone_position` (float64) and
+`bone_orientation`. `rows.bones(i)` is ragdoll row `i`'s slice. `Ragdoll.pose()`
+reads its own rows.
+
+Limits: a hit is an impulse at the bone's centre of mass; a powered ragdoll's
+root spring stands in for balance, which nothing here computes from the feet;
+`save_state` holds the bodies and constraints, and the mode, strength, pose
+target and clip are the world thread's and are not saved. A world with a
+kinematic or powered ragdoll never counts quiet lockstep ticks.
+
+## Soft bodies
+
+```python
+cloth = pj.SoftBodySettings.cloth(2.0, 2.0, columns=32, rows=32, mass=1.0, vertex_radius=0.01)
+a, b, _, _ = cloth.corner_indices()
+sheet = world.add_soft_body(cloth, position=(0, 2, 0), pins=([a, b], cloth.positions[[a, b]] + (0, 2, 0)))
+sheet.set_wind((2.0, 0.0, 0.0))                 # N, shared among the vertices every tick
+rows = world.latest().soft_bodies               # SoftBodyRows
+i = rows.rows()[sheet.uid]
+vertex_buffer = rows.vertices(i)                # (V, 3) float32 view, relative to rows.origin[i]
+```
+
+A soft body is Jolt's soft-body simulation: particles held by edge, shear,
+bend, volume and long-range attachment constraints, solved by XPBD with
+`iterations` a step, with an optional pressure inside a closed surface. It is
+a body: its uid is assigned at submission, it is a row of every snapshot (at
+its centre of mass), it collides with rigid bodies by the world's groups,
+masks and filter table, sleeps and wakes (`activate`), and `remove_bodies`
+removes it. `stats()['soft_bodies']` counts them.
+
+`SoftBodySettings(positions, faces=None, edges=None, edge_compliance=None,
+tetrahedra=None, mass=1.0, masses=None, ...)`:
+
+| Field | Meaning |
+|---|---|
+| `positions` | (V, 3) metres in the body's frame |
+| `mass`, `masses` | kg shared equally, or (V,) each; a vertex of mass 0 is fixed |
+| `faces` | (F, 3), counter-clockwise from the side the normal faces; edges, shear and bend constraints come from them unless `edges` is given |
+| `edges`, `edge_compliance` | (E, 2) and (E,) explicit edges |
+| `tetrahedra`, `volume_compliance` | (T, 4) volume constraints |
+| `compliance`, `shear_compliance`, `bend_compliance` | m/N; 0 rigid, `inf` none (bend is none by default) |
+| `bend` | `Bend.NONE`, `DISTANCE` or `DIHEDRAL` |
+| `pressure` | n R T (Pa m3) inside a closed surface |
+| `long_range`, `long_range_stretch` | `LongRange.NONE`, `EUCLIDEAN` or `GEODESIC` attachments to the nearest pinned vertex, and the slack allowed on the rest distance |
+| `iterations`, `linear_damping` (1/s), `max_velocity` (m/s) | the solver |
+| `friction`, `restitution`, `gravity_factor`, `vertex_radius` (m) | contact; the vertices keep `vertex_radius` from surfaces |
+| `allow_sleep`, `double_sided` | sleeping; faces collide on both sides for queries |
+| `group`, `mask`, `filter`, `material`, `flags` | as a body's |
+
+Builders: `cloth(width, depth, columns, rows, mass)` (y = 0, centred, faces
+up; `corner_indices()`), `rope(points, segments=None, mass=0.1,
+bend_compliance=inf)` (edges along a polyline, plus edges across every second
+vertex with a finite bend compliance), `ball(radius, subdivisions, pressure,
+mass)` (an icosphere held by pressure) and `from_mesh(positions, faces,
+mass)`. `volume(positions=None)` is the enclosed volume. `as_dict()` and
+`from_dict()` convert to builtin types.
+
+Pins. `add_soft_body(settings, position, rotation, pins=(vertices, points),
+pin_bodies=None)`, `SoftBody.pin(vertices, points, bodies=None)`
+(`World.set_soft_pins`) and `unpin()`. A pinned vertex has no mass and is
+moved each tick to reach its point by the end of the step: a world point, or a
+point in the frame of the body at the same index of `bodies`, which it follows
+as that body moves. A pin does not pull on its body. A vertex no longer pinned
+takes back its mass. Pins to a removed body are dropped.
+
+Wind. `SoftBody.set_wind(force)` (`World.set_wind(uids, forces)`) is a force
+(N) applied to the body before every step, which Jolt shares among its free
+vertices, and wakes it. It holds until changed.
+
+`Snapshot.soft_bodies` is a `SoftBodyRows`, a row a soft body in ascending
+uid: `uid`, `origin` (float64 centre of mass, the body row's position),
+`first_vertex`, `vertex_count`, `version`, and every vertex in body order:
+`positions` and `normals` (float32, relative to the origin; area-weighted
+normals of the faces, zero for a vertex on no face). `vertices(i)` and
+`normals_of(i)` are body row `i`'s views, ready for a vertex buffer.
+`version` is the tick the vertices were taken at: a soft body copies its
+vertices after a tick that moved it, and a snapshot buffer copies a body's
+vertices only when its version differs from the one the buffer holds, so an
+asleep cloth costs nothing to publish and a renderer re-uploads a body when
+its version changes. `SoftBody.vertices()` returns world coordinates (a
+float64 copy).
+
+Limits: soft bodies do not collide with each other; contacts between a soft
+body and a rigid body make no event records; `save_state` holds the vertices,
+and pins and wind are the world thread's.
+
 ## Joints
 
 ```python
@@ -969,7 +1142,9 @@ bit. Uids are assigned in submission order, so a replay that submits the same
 batches in the same order gets the same uids, and joint ids likewise.
 Joints, materials, filters, the contact filter (when its answers depend only
 on its arguments), gravity zones, drag and tracks keep the replay bitwise on 1
-and 8 job threads (tests/test_p3_lockstep.py).
+and 8 job threads (tests/test_p3_lockstep.py), and so do vehicles
+(tests/test_vehicle_lockstep.py) and ragdolls in every mode with soft bodies
+under wind (tests/test_p6c_lockstep.py).
 
 ## Fork
 
@@ -989,7 +1164,10 @@ positions; `pose_digest(snapshot, digest)`, a hashlib object updated with a
 snapshot's uids and poses in uid order; `character_digest(snapshot, digest)`,
 the same with every character's id, position, velocity, state, ground and
 slide progress after the poses; `vehicle_digest(snapshot, digest)`, the same
-with every vehicle's rpm, gear, steer, impact and wheel state; `MakeWorld`, the type of the suites'
+with every vehicle's rpm, gear, steer, impact and wheel state;
+`ragdoll_digest(snapshot, digest)`, the same with every ragdoll's mode,
+strength and bone poses; `soft_digest(snapshot, digest)`, the same with every
+soft body's origin, version, vertices and normals; `MakeWorld`, the type of the suites'
 `make_world` fixture.
 
 ## Build information

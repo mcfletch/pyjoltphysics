@@ -59,6 +59,16 @@ Jolt's vehicle constraint with a wheeled, motorcycle or tracked controller
 driven by input batches and read from the snapshot with every wheel's pose,
 load, slip and the surface under it; ten cars step in 0.05 ms a tick.
 `VehicleSettings.from_raycast` maps omi_physics' raycast vehicle tuning.
+Ragdolls are Jolt's ragdoll, a body a bone joined by swing-twist limits,
+kinematic (following an animated pose exactly), powered (motors per bone
+turning it towards the pose, the root held by a limited spring) or limp, with
+blends between the modes; the pose target is a held pose or a clip the world
+thread evaluates each tick, and every joint's pose is one slice of one
+snapshot array. Soft bodies are Jolt's: cloth, ropes, pressure balls and any
+triangle mesh, pinned to world points or to moving bodies, blown by wind,
+colliding with rigid bodies, their vertices and normals float32 views in the
+snapshot rewritten only when they moved. Twenty ragdolls and five cloths of
+1,024 vertices take 0.89 ms a 60 Hz tick on 8 job threads.
 `docs/API.md` describes every call.
 
 The build information:
@@ -130,6 +140,8 @@ The C++ is `src/_native.cpp` (the module and its build information) and
 the world thread), `layers` (collision groups), `shapes`, `queries` (rays,
 sweeps, overlaps), `characters` (the controller over `CharacterVirtual`),
 `vehicles` (the vehicle constraint and its inputs, forces and blows),
+`ragdolls` (Jolt's ragdoll, its modes and pose targets), `softbodies` (soft
+bodies, their pins, wind and vertex cache),
 `seams` (edge removal across static bodies laid flush) and `bind_world` (the
 nanobind classes).
 
@@ -160,6 +172,7 @@ python benchmarks/boxes5000.py --threads 1 8
 python benchmarks/statics.py --threads 1 8
 python benchmarks/characters.py --threads 1 8     # characters, tile streaming, rays, query waits
 python benchmarks/vehicles.py --threads 1 8       # ten cars on a height field
+python benchmarks/ragdolls_cloth.py --threads 1 8 # 20 ragdolls and 5 cloths of 1,024 vertices
 ```
 
 `tests/differential/` runs each scene through Jolt and through `omi_physics`
@@ -170,7 +183,10 @@ compound, and characters (a run across a height field, stairs, slopes, a jump
 at gravity 42, a fall) against omi_physics' controller, and glisteel's car
 (settling, acceleration, braking, cornering, a jump, a wall, a banked road,
 bumps) against omi_physics' raycast vehicle. It is marked `differential` and skipped where `omi_physics` is not
-installed.
+installed. omi_physics has no ragdoll or soft body, so `tests/test_ragdolls.py`
+and `tests/test_softbodies.py` hold those to analytic expectations: rest
+within the joint limits, the animated pose to 1 mm, a hanging cloth's pins to
+0.1 mm, no vertex inside a sphere by more than its radius, a rope's length.
 
 ## Licence
 
