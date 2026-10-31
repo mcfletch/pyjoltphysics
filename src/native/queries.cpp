@@ -206,4 +206,31 @@ int64_t WorldCore::triangle_of(Uid uid, uint32_t sub_shape) {
     return int64_t(static_cast<const JPH::MeshShape *>(leaf)->GetTriangleUserData(remainder));
 }
 
+void WorldCore::bodies_state(const Uid *uids, size_t count, double *position, float *orientation,
+                             float *linear, float *angular, uint8_t *awake, uint8_t *found) {
+    QueryLock lock(*this);
+    const JPH::BodyLockInterfaceNoLock &locks = system_.GetBodyLockInterfaceNoLock();
+    for (size_t i = 0; i < count; ++i) {
+        const Row *row = find(uids[i]);
+        const JPH::Body *body = row == nullptr ? nullptr : locks.TryGetBody(row->id);
+        found[i] = body != nullptr ? 1 : 0;
+        if (body == nullptr)
+            continue;
+        const JPH::RVec3 p = body->GetPosition();
+        const JPH::Quat q = body->GetRotation();
+        const JPH::Vec3 v = body->GetLinearVelocity();
+        const JPH::Vec3 w = body->GetAngularVelocity();
+        for (int k = 0; k < 3; ++k) {
+            position[3 * i + size_t(k)] = p[k];
+            linear[3 * i + size_t(k)] = v[k];
+            angular[3 * i + size_t(k)] = w[k];
+        }
+        orientation[4 * i + 0] = q.GetX();
+        orientation[4 * i + 1] = q.GetY();
+        orientation[4 * i + 2] = q.GetZ();
+        orientation[4 * i + 3] = q.GetW();
+        awake[i] = body->IsActive() ? 1 : 0;
+    }
+}
+
 }  // namespace pj

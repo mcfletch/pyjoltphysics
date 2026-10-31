@@ -56,6 +56,7 @@ from pyjoltphysics.queries import ALL_GROUPS, QueryFilter, RayHit, RayHits, Shap
 from pyjoltphysics.settings import WorldSettings
 from pyjoltphysics.shapes import Shape, ShapeInfo, heightfield_side
 from pyjoltphysics.world import (
+    BodiesState,
     ContactFilter,
     EventsCallback,
     PoseFunction,
@@ -117,6 +118,7 @@ def selftest() -> bool:
 
 
 __all__ = [
+    'BodiesState',
     # the world
     'World',
     'WorldSettings',

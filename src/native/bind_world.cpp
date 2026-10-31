@@ -1376,6 +1376,27 @@ void bind_world(nb::module_ &m) {
             },
             nb::arg("uids"), nb::arg("bits"), nb::arg("on"), nb::arg("at_tick") = 0)
         .def(
+            "bodies_state",
+            [](World &w, const Uids &ids) {
+                const size_t n = ids.shape(0);
+                std::vector<double> position(n * 3, 0.0);
+                std::vector<float> orientation(n * 4, 0.0f), linear(n * 3, 0.0f), angular(n * 3, 0.0f);
+                std::vector<uint8_t> awake(n, 0), found(n, 0);
+                {
+                    nb::gil_scoped_release release;
+                    w.core().bodies_state(ids.data(), n, position.data(), orientation.data(), linear.data(),
+                                          angular.data(), awake.data(), found.data());
+                }
+                return nb::make_tuple(owned<double, nb::shape<-1, 3>>(std::move(position), {n, 3}),
+                                      owned<float, nb::shape<-1, 4>>(std::move(orientation), {n, 4}),
+                                      owned<float, nb::shape<-1, 3>>(std::move(linear), {n, 3}),
+                                      owned<float, nb::shape<-1, 3>>(std::move(angular), {n, 3}),
+                                      owned<uint8_t, nb::shape<-1>>(std::move(awake), {n}),
+                                      owned<uint8_t, nb::shape<-1>>(std::move(found), {n}));
+            },
+            nb::arg("uids"),
+            "Each body's position, orientation, velocities, awake and found, as Jolt holds it now.")
+        .def(
             "triangle_of",
             [](World &w, uint32_t uid, uint32_t sub_shape) {
                 nb::gil_scoped_release release;

@@ -19,6 +19,7 @@ including a callback on the world thread, and take effect at the next tick.
 from __future__ import annotations
 
 import atexit
+import dataclasses
 import math
 import os
 import threading
@@ -43,6 +44,7 @@ from pyjoltphysics.settings import WorldSettings
 from pyjoltphysics.shapes import Shape, ShapeInfo
 
 __all__ = [
+    'BodiesState',
     'ContactFilter',
     'EventsCallback',
     'PoseFunction',
@@ -254,6 +256,24 @@ class Snapshot:
     def includes(self, seq: int) -> bool:
         """True when the batch with sequence number ``seq``, and every batch before it, is applied."""
         return self.applied_seq >= seq
+
+
+@dataclasses.dataclass(frozen=True)
+class BodiesState:
+    """Bodies' state read from Jolt: ``position`` (n, 3) float64, ``orientation`` (n, 4),
+    ``linear_velocity`` and ``angular_velocity`` (n, 3) float32, ``awake`` and ``found``
+    (n,) bool; a row whose uid names no body is zero with ``found`` false."""
+
+    position: npt.NDArray[np.float64]
+    orientation: npt.NDArray[np.float32]
+    linear_velocity: npt.NDArray[np.float32]
+    angular_velocity: npt.NDArray[np.float32]
+    awake: npt.NDArray[np.bool_]
+    found: npt.NDArray[np.bool_]
+
+    def __post_init__(self) -> None:
+        object.__setattr__(self, 'awake', np.asarray(self.awake, dtype=bool))
+        object.__setattr__(self, 'found', np.asarray(self.found, dtype=bool))
 
 
 class World:
@@ -983,6 +1003,15 @@ class World:
         if bits & ~int(BodyFlag.REPORT | BodyFlag.NO_SLEEP | BodyFlag.FILTER_CONTACTS):
             raise ValueError('only REPORT, NO_SLEEP and FILTER_CONTACTS change after a body is added')
         return self._native.set_flags(_uids(uids), bits, bool(on), at_tick)
+
+    def bodies_state(self, uids: npt.ArrayLike) -> BodiesState:
+        """The bodies of ``uids`` as Jolt holds them now, not as the last snapshot published them.
+
+        From a world callback it reads the world as the tick stands (after its
+        batches, before its step); from another thread it takes the world
+        lock's shared side, as a query does.
+        """
+        return BodiesState(*self._native.bodies_state(_uids(uids)))
 
     def triangle_of(self, uid: int, sub_shape: int) -> int:
         """The number of the mesh triangle a query's ``sub_shape`` names on body ``uid``; -1 for another part.

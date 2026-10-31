@@ -247,6 +247,11 @@ class World:
 
     def set_flags(self, uids: Annotated[NDArray[numpy.uint32], dict(shape=(None,), order='C', device='cpu', writable=False)], bits: int, on: bool, at_tick: int = 0) -> int: ...
 
+    def bodies_state(self, uids: Annotated[NDArray[numpy.uint32], dict(shape=(None,), order='C', device='cpu', writable=False)]) -> tuple:
+        """
+        Each body's position, orientation, velocities, awake and found, as Jolt holds it now.
+        """
+
     def triangle_of(self, uid: int, sub_shape: int) -> int:
         """
         The number of the mesh triangle sub_shape names on body uid, or -1 for a part that is no mesh triangle.

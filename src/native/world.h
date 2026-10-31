@@ -192,6 +192,10 @@ public:
                  const QueryFilter &filter, RayResults &out);
     std::vector<ShapeHit> cast_shape(const JPH::Shape &shape, const double start[3], const double rotation[4],
                                      const double end[3], bool all_hits, const QueryFilter &filter);
+    // Each body's pose, velocities and wakefulness as Jolt holds them now; found is 0 for a uid
+    // that names no body.
+    void bodies_state(const Uid *uids, size_t count, double *position, float *orientation, float *linear,
+                      float *angular, uint8_t *awake, uint8_t *found);
     // The number a mesh triangle was given, for a query's sub-shape on body uid; -1 for other parts.
     int64_t triangle_of(Uid uid, uint32_t sub_shape);
     std::vector<Uid> overlap(const JPH::Shape &shape, const double position[3], const double rotation[4],
@@ -234,6 +238,8 @@ private:
     template <typename Body> bool call_python(Body &&body);
     void fail(nb::python_error &error);
     void note_applied(uint64_t seq);
+    // Applies the batches due at tick `index`, logging them; whether there were any.
+    bool apply_due(uint64_t index, std::vector<Batch> &due);
     void publish(uint64_t tick);
 
     // apply.cpp: one function per command, on the world thread.

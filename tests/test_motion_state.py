@@ -268,3 +268,46 @@ def test_flush_publishes_what_it_applied(make_world: MakeWorld) -> None:
     row = snap.rows[ball]
     assert np.allclose(snap.position[row], (1.0, 2.0, 3.0))
     assert snap.linear_velocity[row][0] == pytest.approx(3.0)
+
+
+def test_a_command_from_before_step_applies_in_that_tick(make_world: MakeWorld) -> None:
+    world = make_world(tick_hz=60.0, threads=1, gravity=(0.0, 0.0, 0.0))
+    (ball,), _ = world.add_bodies(BodyBatch.spheres([(0.0, 0.0, 0.0)], radius=0.5))
+    world.run_ticks(1)
+
+    def push(tick: int, time: float) -> None:
+        if tick == 1:
+            world.set_velocities([ball], linear=(6.0, 0.0, 0.0))
+
+    world.set_before_step(push)
+    world.run_ticks(1)
+    world.set_before_step(None)
+    position, velocity = _state(world, ball)
+    assert velocity[0] == pytest.approx(6.0)
+    assert position[0] == pytest.approx(6.0 / 60.0, rel=1e-4)
+
+
+def test_bodies_state_reads_the_bodies_as_they_stand(make_world: MakeWorld) -> None:
+    world = make_world(tick_hz=60.0, threads=1, gravity=(0.0, 0.0, 0.0))
+    (ball,), _ = world.add_bodies(BodyBatch.spheres([(1.0, 2.0, 3.0)], radius=0.5,
+                                                    linear_velocity=(0.0, 0.0, 2.0)))
+    world.run_ticks(1)
+    seen: list[tuple[np.ndarray, np.ndarray]] = []
+
+    def look(tick: int, time: float) -> None:
+        if tick == 1:
+            world.set_velocities([ball], linear=(5.0, 0.0, 0.0))
+            state = world.bodies_state([ball, 9999])
+            seen.append((np.array(state.linear_velocity[0]), np.array(state.found)))
+
+    world.set_before_step(look)
+    world.run_ticks(1)
+    world.set_before_step(None)
+    (velocity, found), = seen
+    assert np.allclose(velocity, (0.0, 0.0, 2.0))
+    assert found.tolist() == [True, False]
+    state = world.bodies_state([ball])
+    snap = latest(world)
+    assert np.allclose(state.position[0], snap.position[snap.rows[ball]])
+    assert np.allclose(state.linear_velocity[0], (5.0, 0.0, 0.0))
+    assert bool(state.awake[0])

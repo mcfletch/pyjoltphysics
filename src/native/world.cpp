@@ -477,6 +477,24 @@ bool WorldCore::run_python_after(uint64_t tick) {
     });
 }
 
+bool WorldCore::apply_due(uint64_t index, std::vector<Batch> &due) {
+    due.clear();
+    queue_.take_due(index, due);
+    for (Batch &batch : due) {
+        apply(batch, index);
+        note_applied(batch.seq);
+    }
+    characters_->flush_events(tick_events_);
+    if (due.empty())
+        return false;
+    std::lock_guard<std::mutex> guard(applied_lock_);
+    for (const Batch &batch : due) {
+        applied_log_.push_back(batch.seq);
+        applied_log_.push_back(index);
+    }
+    return true;
+}
+
 void WorldCore::flush() {
     check();
     if (on_world_thread())
@@ -484,55 +502,34 @@ void WorldCore::flush() {
     const uint64_t index = tick_.load();
     std::unique_lock<WorldLock> exclusive(world_lock_);
     std::vector<Batch> due;
-    queue_.take_due(index, due);
-    for (Batch &batch : due) {
-        apply(batch, index);
-        note_applied(batch.seq);
-    }
-    characters_->flush_events(tick_events_);
-    if (!due.empty()) {
-        {
-            std::lock_guard<std::mutex> guard(applied_lock_);
-            for (const Batch &batch : due) {
-                applied_log_.push_back(batch.seq);
-                applied_log_.push_back(index);
-            }
-        }
-        // The snapshot of the tick it applied at, with what the batches changed.
+    // The snapshot of the tick it applied at, with what the batches changed.
+    if (apply_due(index, due))
         publish(index);
-    }
 }
 
 bool WorldCore::tick_once() {
     const auto t0 = Clock::now();
     const uint64_t index = tick_.load();
     std::unique_lock<WorldLock> exclusive(world_lock_);
-    due_.clear();
-    queue_.take_due(index, due_);
-    for (Batch &batch : due_) {
-        apply(batch, index);
-        note_applied(batch.seq);
-    }
-    characters_->flush_events(tick_events_);
-    if (!due_.empty()) {
-        std::lock_guard<std::mutex> guard(applied_lock_);
-        for (const Batch &batch : due_) {
-            applied_log_.push_back(batch.seq);
-            applied_log_.push_back(index);
-        }
-    }
+    apply_due(index, due_);
     exclusive.unlock();
     const auto t1 = Clock::now();
     double python_s = 0.0;
+    bool before = false;
     {
         std::shared_lock<WorldLock> shared(world_lock_);
         const auto c0 = Clock::now();
+        before = callbacks_.has_at_tick.load() || callbacks_.has_before.load() ||
+                 callbacks_.has_drivers.load();
         const bool ok = run_python_before(index);
         python_s += seconds(Clock::now() - c0);
         if (!ok)
             return false;
     }
     exclusive.lock();
+    // What the before-step code submitted applies in this tick, before the step.
+    if (before)
+        apply_due(index, due_);
     const auto t2 = Clock::now();
     move_kinematics(index);
     activate_motor_joints();

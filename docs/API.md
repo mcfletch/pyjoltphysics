@@ -91,6 +91,7 @@ A frozen dataclass; every field has a default.
 | Call | Returns |
 |---|---|
 | `latest()` | the newest `Snapshot`, or None before the first tick; never waits |
+| `bodies_state(uids)` | a `BodiesState` of each body's `position`, `orientation`, `linear_velocity`, `angular_velocity`, `awake` and `found` as Jolt holds it now: inside a callback, the tick as it stands; elsewhere under the world lock's shared side |
 | `wait_tick(tick, timeout=None)` | True once a snapshot of `tick` or later is published; False on timeout or when the world stops |
 | `drain_events()` | every event record since the last drain, as an array of `EVENT_DTYPE` |
 | `drain_applied()` | (k, 2) uint64 `(seq, tick)`: each batch applied since the last drain and the index of the tick that applied it |
@@ -795,7 +796,9 @@ returns its argument, so it can decorate the function; None removes it.
 | `set_on_events(fn)` | `fn(events, tick, time)` after a tick that made records |
 | `at_tick(tick, fn)` | `fn(tick, time)` once, before `before_step`, at the first tick whose index is at least `tick` |
 
-A callback may submit commands; they apply at the next tick. It may call
+A callback may submit commands. Those submitted from an `at_tick` callable,
+`before_step` or a `drive` pose function apply in the same tick, before its
+step; those from `after_step` and `on_events` apply at the next tick. It may call
 `stop()`, which ends the thread after the current tick. `run_ticks` and
 `wait_tick` from a callback raise `RuntimeError`.
 
