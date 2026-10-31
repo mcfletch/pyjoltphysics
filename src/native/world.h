@@ -101,7 +101,7 @@ struct WorldStats {
     bool idle = false;
     bool running = false;
     // Mean milliseconds a tick, since the last reset.
-    double apply_ms = 0, characters_ms = 0, step_ms = 0, events_ms = 0, publish_ms = 0, callbacks_ms = 0, tick_ms = 0;
+    double apply_ms = 0, characters_ms = 0, ragdolls_ms = 0, soft_bodies_ms = 0, step_ms = 0, events_ms = 0, publish_ms = 0, callbacks_ms = 0, tick_ms = 0;
     uint64_t timed_ticks = 0;
     // Lockstep ticks a quiet world counted without stepping, since the last reset.
     uint64_t quiet_ticks = 0;

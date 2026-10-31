@@ -452,6 +452,8 @@ nb::dict stats(const World &world) {
     out["ragdolls"] = s.ragdolls;
     out["soft_bodies"] = s.soft_bodies;
     out["characters_ms"] = s.characters_ms;
+    out["ragdolls_ms"] = s.ragdolls_ms;
+    out["soft_bodies_ms"] = s.soft_bodies_ms;
     out["queries"] = s.queries;
     out["query_wait_ms"] = s.query_wait_ms;
     out["query_wait_max_ms"] = s.query_wait_max_ms;

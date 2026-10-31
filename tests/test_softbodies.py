@@ -12,6 +12,8 @@ from pyjoltphysics import (
     BodyBatch,
     LongRange,
     MotionType,
+    RagdollMode,
+    RagdollSettings,
     Snapshot,
     SoftBody,
     SoftBodySettings,
@@ -352,3 +354,20 @@ def test_iterations_rise_as_edges_shorten() -> None:
     assert SoftBodySettings.cloth(1.0, 1.0, 3, 3, iterations=7).iterations == 7
     with pytest.raises(ValueError):
         iterations_for(0.0)
+
+
+def test_stats_time_the_ragdolls_and_soft_bodies(make_world: MakeWorld) -> None:
+    world = make_world(tick_hz=HZ, threads=1)
+    world.add_bodies(floor())
+    assert world.stats()['ragdolls_ms'] == 0.0 and world.stats()['soft_bodies_ms'] == 0.0
+    cloth = SoftBodySettings.cloth(1.0, 1.0, columns=11, rows=11, mass=0.5)
+    world.add_soft_body(cloth, position=(0.0, 1.0, 0.0))
+    doll = world.add_ragdoll(RagdollSettings.humanoid(), mode=RagdollMode.POWERED)
+    doll.play([0.0, 1.0], np.tile(RagdollSettings.humanoid().rest_rotations, (2, 1, 1)), loop=True)
+    world.run_ticks(30)
+    stats = world.stats()
+    assert stats['soft_bodies_ms'] > 0.0
+    assert stats['ragdolls_ms'] > 0.0
+    assert stats['ragdolls_ms'] <= stats['characters_ms']
+    world.reset_stats()
+    assert world.stats()['soft_bodies_ms'] == 0.0

@@ -50,6 +50,7 @@
 - Soft bodies: `World.add_soft_body`, `set_soft_pins`, `set_wind`; `SoftBody`, `SoftBodySettings` (`cloth`, `rope`, `ball`, `from_mesh`, `as_dict`, `from_dict`), `Bend`, `LongRange`; bend constraints of compliance 0.01 and iterations by the shortest edge by default (`iterations_for`); pins to world points or bodies; `Snapshot.soft_bodies` (`SoftBodyRows`), vertices and normals copied only for bodies that moved.
 - `add_forces` and `add_impulses` take world `points` to act at.
 - `stats()['ragdolls']`, `stats()['soft_bodies']`; `pyjoltphysics.testing.ragdoll_digest` and `soft_digest`.
+- `stats()`: `ragdolls_ms` and `soft_bodies_ms`, the world thread's time a tick on ragdolls and on soft bodies.
 
 - `jolt_version()`, `build_options()` and `selftest()` over the compiled module `pyjoltphysics._native`.
 - Jolt Physics v5.6.0 (commit e77f1755), double precision, cross-platform deterministic, SSE4.2 floor on x86-64.

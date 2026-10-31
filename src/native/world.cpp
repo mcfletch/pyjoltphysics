@@ -595,7 +595,9 @@ bool WorldCore::tick_once() {
     activate_motor_joints();
     characters_->step(dt_, uint32_t(index + 1), *jobs_, tick_events_);
     vehicles_->before_step(dt_);
+    const auto r0 = Clock::now();
     ragdolls_->before_step(time_, dt_);
+    const auto r1 = Clock::now();
     soft_->before_step(dt_, [this](Uid uid) {
         const Row *row = find(uid);
         return row ? row->id : JPH::BodyID();
@@ -623,7 +625,9 @@ bool WorldCore::tick_once() {
                 tick_events_);
     expire_verdicts(uint32_t(tick));
     vehicles_->after_step(uint32_t(tick), tick_events_);
+    const auto s0 = Clock::now();
     soft_->after_step(tick);
+    const auto s1 = Clock::now();
     ring_.append(tick_events_);
     quiet_ = was_settled && !reported && tick_events_.empty() && settled() ? quiet_ + 1 : 0;
     const auto t4 = Clock::now();
@@ -638,6 +642,8 @@ bool WorldCore::tick_once() {
         std::lock_guard<std::mutex> guard(stats_lock_);
         sums_.apply_ms += seconds(t1 - t0);
         sums_.characters_ms += seconds(t2b - t2);
+        sums_.ragdolls_ms += seconds(r1 - r0);
+        sums_.soft_bodies_ms += seconds(t2b - r1) + seconds(s1 - s0);
         sums_.step_ms += seconds(t3 - t2b);
         sums_.events_ms += seconds(t4 - t3);
         sums_.publish_ms += seconds(t5 - t4);
@@ -836,6 +842,8 @@ WorldStats WorldCore::stats() const {
         const double per = 1e3 / double(out.timed_ticks);
         out.apply_ms *= per;
         out.characters_ms *= per;
+        out.ragdolls_ms *= per;
+        out.soft_bodies_ms *= per;
         out.step_ms *= per;
         out.events_ms *= per;
         out.publish_ms *= per;
