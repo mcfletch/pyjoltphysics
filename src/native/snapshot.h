@@ -65,7 +65,7 @@ struct SnapshotBuffer {
     std::vector<float> joint_torque;  // N m carried in the last step
 
     bool written = false;
-    uint64_t written_tick = 0;
+    uint64_t written_stamp = 0;  // the publish that last wrote it
 
     void resize(uint32_t count);
     void resize_characters(uint32_t count);
@@ -88,7 +88,8 @@ public:
 
 private:
     std::vector<std::shared_ptr<SnapshotBuffer>> pool_;
-    std::deque<std::pair<uint64_t, std::vector<uint32_t>>> history_;
+    std::deque<std::pair<uint64_t, std::vector<uint32_t>>> history_;  // (publish stamp, rows changed)
+    uint64_t stamps_ = 0;
     std::vector<uint32_t> tick_changed_;
     std::vector<uint32_t> spare_;
     std::vector<uint64_t> mark_stamp_;

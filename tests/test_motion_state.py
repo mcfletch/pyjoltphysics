@@ -326,3 +326,14 @@ def test_a_box_of_little_rounding_has_sharp_edges(make_world: MakeWorld) -> None
     assert len(world.overlap(speck, (10.99, 0.99, 0.99))) == 0
     with pytest.raises(ValueError, match='rounding'):
         Shape.box((1.0, 1.0, 1.0), rounding=-1.0)
+
+
+def test_several_flushes_in_one_tick_each_publish_what_they_applied(make_world: MakeWorld) -> None:
+    world = make_world(tick_hz=60.0, threads=1, gravity=(0.0, 0.0, 0.0))
+    (ball,), _ = world.add_bodies(BodyBatch.spheres([(0.0, 0.0, 0.0)], radius=0.5))
+    world.run_ticks(1)
+    for x in (8.0, 0.0, 8.0, 3.0):
+        world.set_transforms([ball], (x, 0.6, 0.0))
+        world.flush()
+        snap = latest(world)
+        assert snap.position[snap.rows[ball]][0] == pytest.approx(x)

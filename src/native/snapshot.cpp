@@ -59,12 +59,14 @@ std::shared_ptr<SnapshotBuffer> SnapshotPublisher::publish(
     uint64_t tick, double time, uint64_t applied_seq, uint32_t rows,
     const std::function<void(uint32_t, SnapshotBuffer &)> &write) {
     ++mark_epoch_;
+    // History and buffers count publishes, not ticks: a flush publishes again within a tick.
+    const uint64_t stamp = ++stamps_;
     if (history_.size() >= kHistory) {
         spare_ = std::move(history_.front().second);
         history_.pop_front();
     }
     std::sort(tick_changed_.begin(), tick_changed_.end());
-    history_.emplace_back(tick, std::move(tick_changed_));
+    history_.emplace_back(stamp, std::move(tick_changed_));
     tick_changed_ = std::move(spare_);
     tick_changed_.clear();
 
@@ -87,7 +89,7 @@ std::shared_ptr<SnapshotBuffer> SnapshotPublisher::publish(
     // The oldest tick the history covers: a buffer written before it misses
     // changes and is rewritten whole.
     const uint64_t covered_from = history_.front().first;
-    const bool whole = !buffer->written || buffer->written_tick + 1 < covered_from;
+    const bool whole = !buffer->written || buffer->written_stamp + 1 < covered_from;
     buffer->resize(rows);
     if (whole) {
         for (uint32_t row = 0; row < rows; ++row)
@@ -96,8 +98,8 @@ std::shared_ptr<SnapshotBuffer> SnapshotPublisher::publish(
         ++write_epoch_;
         if (write_stamp_.size() < rows)
             write_stamp_.resize(rows, 0);
-        for (const auto &[changed_tick, changed_rows] : history_) {
-            if (changed_tick <= buffer->written_tick)
+        for (const auto &[changed_stamp, changed_rows] : history_) {
+            if (changed_stamp <= buffer->written_stamp)
                 continue;
             for (uint32_t row : changed_rows) {
                 if (row < rows && write_stamp_[row] != write_epoch_) {
@@ -113,7 +115,7 @@ std::shared_ptr<SnapshotBuffer> SnapshotPublisher::publish(
         if (row < rows)
             buffer->changed.push_back(row);
     buffer->written = true;
-    buffer->written_tick = tick;
+    buffer->written_stamp = stamp;
     buffer->tick = tick;
     buffer->time = time;
     buffer->applied_seq = applied_seq;
