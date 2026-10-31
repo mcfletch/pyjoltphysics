@@ -498,7 +498,7 @@ class VehicleSettings:
           ``holding`` (N) becomes the brake input ``holding / brake_force``
           below 0.5 m/s.
         - The tyre curves saturate at full grip: longitudinal friction 1 from
-          a slip ratio of 0.05, lateral friction 1 from half a degree, flat beyond,
+          a slip ratio of 0.05, lateral friction 1 from a tenth of a degree, flat beyond,
           scaled by each wheel's grip; the ground body's friction is not
           used (``body_friction`` False), as the raycast vehicle uses only
           its ``Surface``.
@@ -575,7 +575,7 @@ class VehicleSettings:
             differential_ratio=1.0,
             differential_limited_slip=math.inf,
             longitudinal_friction=((0.0, 0.0), (0.05, 1.0), (1.0, 1.0)),
-            lateral_friction=((0.0, 0.0), (0.5, 1.0), (90.0, 1.0)),
+            lateral_friction=((0.0, 0.0), (0.1, 1.0), (90.0, 1.0)),
             body_friction=False,
             max_steer=maximum_steer,
             steer_falloff_speed=float(getattr(tuning, 'steer_falloff_speed', 0.0)),

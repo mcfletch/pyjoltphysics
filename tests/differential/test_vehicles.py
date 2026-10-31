@@ -116,15 +116,15 @@ def test_on_a_banked_road_it_stands_and_drives() -> None:
     inputs = V.phases((0.3, (0.0, 0.0, 0.0)), (3.0, (1.0, 0.0, 0.0)), (60.0, (0.3, 0.0, 0.0)))
     omi, jolt = _both(V.bank(angle), inputs, 6.0)
     assert jolt.speed()[-1] == pytest.approx(omi.speed()[-1], rel=0.08)
-    # The slip-curve tyre takes 0.5 degrees of slip to hold the slope: 2.8 m downhill over 200 m.
-    assert abs(jolt.position[-1, 0]) < 3.5 and abs(jolt.heading()[-1]) < 0.03
+    # Held on the slope by a tenth of a degree of tyre slip: within omi's 0.5 m of the line.
+    assert abs(jolt.position[-1, 0]) < 0.6 and abs(jolt.heading()[-1]) < 0.01
 
 
 def test_over_bumps_it_rides_like_the_raycast_car() -> None:
     inputs = V.phases((0.3, (0.0, 0.0, 0.0)), (3.0, (1.0, 0.0, 0.0)), (60.0, (0.3, 0.0, 0.0)))
     omi, jolt = _both(V.bumpy(), inputs, 6.0, start=(0.0, 0.7, 60.0))
     rms = [float(np.sqrt((d.velocity[d.at(1.0) :, 1] ** 2).mean())) for d in (omi, jolt)]
-    assert rms[1] == pytest.approx(rms[0], rel=0.25)
+    assert rms[1] == pytest.approx(rms[0], rel=0.15)
     assert jolt.speed()[-1] == pytest.approx(omi.speed()[-1], rel=0.10)
     assert jolt.up[:, 1].min() > 0.99
-    assert abs(jolt.position[-1, 0]) < 4.0
+    assert abs(jolt.position[-1, 0]) < 2.0

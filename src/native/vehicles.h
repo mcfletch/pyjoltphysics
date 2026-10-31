@@ -74,7 +74,7 @@ enum VehicleParam : uint32_t {
     kImpactSpeed,           // m/s: blows closing at least this fast are reported as events
     kCrashSpeed,            // m/s: blows closing at least this fast are reported as crashes
     kMaxLeanAngle, kLeanSpring, kLeanDamping, kLeanIntegration, kLeanIntegrationDecay, kLeanSmoothing,
-    kCasterRadius,          // sphere cast radius, m; 0 takes each wheel's radius
+    kCasterRadius,          // sphere cast radius, m; 0 takes the smallest wheel radius
     kParamCount,
 };
 
