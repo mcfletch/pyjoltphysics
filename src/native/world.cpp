@@ -770,6 +770,7 @@ WorldStats WorldCore::stats() const {
     out.ticks = tick_.load();
     out.dropped_ticks = dropped_ticks_.load();
     out.events_dropped = ring_.dropped();
+    out.events_held = ring_.size();
     out.rejected = rejected_.load();
     out.pool = pool_size_.load();
     out.bodies = applied_bodies_.load();

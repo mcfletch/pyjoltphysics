@@ -37,6 +37,7 @@
 - `WorldSettings.penetration_slop`; `World.flush`, which applies due batches and publishes without stepping; `World.bodies_state`; `World.triangle_of` and `Shape.mesh(ids=)`; `MaterialTable.pairing`; `set_contact_filter(either=, recheck=)`; `Shape.box(rounding=)`.
 - Commands from `before_step`, `at_tick` and `drive` code apply in the tick that called them; snapshot history is kept by publish, so several publishes in a tick stay distinct.
 - The event record is 72 bytes, with the contact `depth`.
+- `stats()`: `events_held`, the records the ring holds until the next drain.
 
 - `jolt_version()`, `build_options()` and `selftest()` over the compiled module `pyjoltphysics._native`.
 - Jolt Physics v5.6.0 (commit e77f1755), double precision, cross-platform deterministic, SSE4.2 floor on x86-64.

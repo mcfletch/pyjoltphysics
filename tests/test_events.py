@@ -177,6 +177,17 @@ def test_a_full_ring_drops_persist_records_first(make_world: MakeWorld) -> None:
     assert world.stats()['events_dropped'] > 0
 
 
+def test_stats_count_the_records_the_ring_holds_until_a_drain(make_world: MakeWorld) -> None:
+    world = make_world(threads=1, allow_sleeping=False)
+    world.add_bodies(floor())
+    world.add_bodies(BodyBatch.boxes(grid(4, spacing=2.0, y0=0.5), flags=BodyFlag.REPORT))
+    assert world.stats()['events_held'] == 0
+    world.run_ticks(30)
+    held = world.stats()['events_held']
+    assert held == len(world.drain_events()) > 0
+    assert world.stats()['events_held'] == 0
+
+
 def test_begin_and_end_records_exceed_the_capacity_rather_than_drop(
     make_world: MakeWorld,
 ) -> None:

@@ -349,7 +349,7 @@ std::vector<Event> EventRing::drain() {
     return out;
 }
 
-size_t EventRing::size() {
+size_t EventRing::size() const {
     std::lock_guard<std::mutex> guard(lock_);
     return events_.size();
 }

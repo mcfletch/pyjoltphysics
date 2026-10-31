@@ -183,12 +183,12 @@ public:
     void append(const std::vector<Event> &events);
     std::vector<Event> drain();
     uint64_t dropped() const { return dropped_.load(); }
-    size_t size();
+    size_t size() const;
 
 private:
     size_t drop(EventPhase first, EventPhase last, size_t wanted);
     size_t capacity_;
-    std::mutex lock_;
+    mutable std::mutex lock_;
     std::vector<Event> events_;
     std::atomic<uint64_t> dropped_{0};
 };

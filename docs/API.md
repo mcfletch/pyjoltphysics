@@ -99,7 +99,7 @@ A frozen dataclass; every field has a default.
 | `lockstep` | True unless `start()` is free-running the world |
 | `error` | the exception a callback raised, or None |
 | `submitted_seq` | the sequence number of the last batch submitted |
-| `stats()` | counters (`ticks`, `dropped_ticks`, `events_dropped`, `rejected`, `pool`, `bodies` in the world, `queued_bodies` submitted and not yet applied, `shapes` registered, `broadphase_optimizations`, `idle`, `running`) `characters`, `queries` that waited for the world lock, and mean milliseconds a tick since `reset_stats()` (`apply_ms`, `characters_ms`, `step_ms`, `events_ms`, `publish_ms`, `callbacks_ms`, `tick_ms`), with `query_wait_ms` and `query_wait_max_ms`, the mean and longest wait of a query for the world lock |
+| `stats()` | counters (`ticks`, `dropped_ticks`, `events_dropped`, `events_held` in the ring until the next drain, `rejected`, `pool`, `bodies` in the world, `queued_bodies` submitted and not yet applied, `shapes` registered, `broadphase_optimizations`, `idle`, `running`) `characters`, `queries` that waited for the world lock, and mean milliseconds a tick since `reset_stats()` (`apply_ms`, `characters_ms`, `step_ms`, `events_ms`, `publish_ms`, `callbacks_ms`, `tick_ms`), with `query_wait_ms` and `query_wait_max_ms`, the mean and longest wait of a query for the world lock |
 
 ## Commands
 
@@ -400,7 +400,7 @@ The ring holds `event_capacity` records. When it is full, persist records go
 first, oldest first, then sleep and wake records; begin and end records are
 never dropped, so that each pair's state stays balanced, and a ring holding
 only those grows past its capacity until it is drained. Dropped records are
-counted in `stats()['events_dropped']`.
+counted in `stats()['events_dropped']`. `stats()['events_held']` is how many it holds now.
 
 Character records (`kind` `CHARACTER`, `a` the character's id):
 

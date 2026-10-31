@@ -436,6 +436,7 @@ nb::dict stats(const World &world) {
     out["ticks"] = s.ticks;
     out["dropped_ticks"] = s.dropped_ticks;
     out["events_dropped"] = s.events_dropped;
+    out["events_held"] = s.events_held;
     out["rejected"] = s.rejected;
     out["pool"] = s.pool;
     out["bodies"] = s.bodies;
