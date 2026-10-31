@@ -191,7 +191,7 @@ void WorldCore::run_ticks(uint64_t count) {
         throw std::runtime_error("run_ticks cannot be called from the world thread");
     if (failed_.load())
         throw CallbackFailed();
-    if (count == 0)
+    if (count == 0 || run_quiet(count))
         return;
     {
         std::lock_guard<std::mutex> joining(join_lock_);
@@ -217,6 +217,37 @@ void WorldCore::run_ticks(uint64_t count) {
         wanted_ = 0;
         throw WorldStopped();
     }
+}
+
+bool WorldCore::settled() const {
+    return !callbacks_.any_step() && characters_->empty() && tracks_.empty() && driven_.empty() &&
+           fields_.torques.empty() && system_.GetNumActiveBodies(JPH::EBodyType::RigidBody) == 0;
+}
+
+// A settled tick that applies no batch, runs no callable and makes no contact
+// report leaves Jolt's contact caches empty; after kQuietAfter of them in a row
+// a step changes nothing, so the ticks are counted rather than stepped. The
+// join lock keeps out another run_ticks, and lockstep with nothing wanted
+// keeps the world thread out of a tick; the world lock keeps out flush and a
+// broad phase optimisation.
+bool WorldCore::run_quiet(uint64_t count) {
+    std::lock_guard<std::mutex> joining(join_lock_);
+    {
+        std::lock_guard<std::mutex> guard(control_);
+        if (mode_ != Mode::Lockstep || wanted_ != 0)
+            return false;
+    }
+    std::unique_lock<WorldLock> exclusive(world_lock_);
+    const uint64_t index = tick_.load();
+    if (quiet_ < kQuietAfter || !queue_.empty() || callbacks_.earliest_at_tick.load() < index + count ||
+        !settled())
+        return false;
+    const uint64_t tick = index + count;
+    time_ = double(tick) * dt_;
+    publish(tick);
+    std::lock_guard<std::mutex> guard(stats_lock_);
+    sums_.quiet_ticks += count;
+    return true;
 }
 
 bool WorldCore::wait_tick(uint64_t tick, double timeout) {
@@ -499,19 +530,21 @@ void WorldCore::flush() {
     check();
     if (on_world_thread())
         return;
-    const uint64_t index = tick_.load();
     std::unique_lock<WorldLock> exclusive(world_lock_);
+    const uint64_t index = tick_.load();
     std::vector<Batch> due;
     // The snapshot of the tick it applied at, with what the batches changed.
-    if (apply_due(index, due))
+    if (apply_due(index, due)) {
+        quiet_ = 0;
         publish(index);
+    }
 }
 
 bool WorldCore::tick_once() {
     const auto t0 = Clock::now();
     const uint64_t index = tick_.load();
     std::unique_lock<WorldLock> exclusive(world_lock_);
-    apply_due(index, due_);
+    bool applied = apply_due(index, due_);
     exclusive.unlock();
     const auto t1 = Clock::now();
     double python_s = 0.0;
@@ -529,7 +562,8 @@ bool WorldCore::tick_once() {
     exclusive.lock();
     // What the before-step code submitted applies in this tick, before the step.
     if (before)
-        apply_due(index, due_);
+        applied = apply_due(index, due_) || applied;
+    const bool was_settled = !before && !applied && settled();
     const auto t2 = Clock::now();
     move_kinematics(index);
     activate_motor_joints();
@@ -547,6 +581,7 @@ bool WorldCore::tick_once() {
     const uint64_t tick = index + 1;
     time_ = double(tick) * dt_;
     collector_.take(raw_contacts_, raw_activations_);
+    const bool reported = !raw_contacts_.empty() || !raw_activations_.empty();
     for (const RawActivation &change : raw_activations_) {
         const uint32_t row = change.uid < row_of_uid_.size() ? row_of_uid_[change.uid] : kNoRow;
         if (row != kNoRow)
@@ -556,6 +591,7 @@ bool WorldCore::tick_once() {
                 tick_events_);
     expire_verdicts(uint32_t(tick));
     ring_.append(tick_events_);
+    quiet_ = was_settled && !reported && tick_events_.empty() && settled() ? quiet_ + 1 : 0;
     const auto t4 = Clock::now();
     publish(tick);
     const auto t5 = Clock::now();

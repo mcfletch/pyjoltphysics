@@ -15,6 +15,10 @@
 // The thread free-runs at tick_hz, or in lockstep runs only the ticks
 // run_ticks asks for. A free-running world with no pending batch, no awake
 // body and no step callback waits on a condition variable and runs no ticks.
+// In lockstep, once such a world has stepped kQuietAfter ticks that applied
+// and reported nothing, Jolt's state no longer changes from tick to tick, and
+// run_ticks counts its ticks and publishes on the calling thread without
+// stepping.
 #pragma once
 
 #include "callbacks.h"
@@ -93,6 +97,8 @@ struct WorldStats {
     // Mean milliseconds a tick, since the last reset.
     double apply_ms = 0, characters_ms = 0, step_ms = 0, events_ms = 0, publish_ms = 0, callbacks_ms = 0, tick_ms = 0;
     uint64_t timed_ticks = 0;
+    // Lockstep ticks a quiet world counted without stepping, since the last reset.
+    uint64_t quiet_ticks = 0;
     // Queries that waited for the world lock: how many, the mean and the longest wait.
     uint64_t queries = 0;
     double query_wait_ms = 0, query_wait_max_ms = 0;
@@ -230,9 +236,19 @@ private:
         JPH::BodyID id;
     };
 
+    // Ticks of a settled world after which a tick changes nothing but the tick count.
+    static constexpr uint64_t kQuietAfter = 2;
+
     void loop();
     bool busy() const;
     bool tick_once();
+    // Whether nothing in the world moves or acts at a tick: no awake body, character,
+    // kinematic track or target, motor torque or step callback.
+    bool settled() const;
+    // run_ticks for a quiet world: the tick count and time advance by `count` and one
+    // snapshot is published, with no step; false where any of the ticks could change
+    // the world.
+    bool run_quiet(uint64_t count);
     bool run_python_before(uint64_t index);
     bool run_python_after(uint64_t tick);
     template <typename Body> bool call_python(Body &&body);
@@ -397,6 +413,8 @@ private:
 
     std::atomic<uint64_t> tick_{0};
     double time_ = 0.0;
+    // Consecutive ticks that stepped a settled world, applied nothing and reported nothing.
+    uint64_t quiet_ = 0;
     mutable std::mutex stats_lock_;
     WorldStats sums_;
     std::atomic<uint64_t> dropped_ticks_{0};

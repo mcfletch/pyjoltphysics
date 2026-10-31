@@ -49,6 +49,17 @@ count and simulation time stand still. A command wakes it at once. An
 `at_tick` for a later tick does not keep it ticking: the callable runs when
 other work, or `run_ticks`, brings the world to its tick.
 
+A lockstep world counts ticks without stepping once it is quiet: no awake
+body, character, kinematic track or target, motor torque or step callback,
+and two ticks in a row that applied no batch and made no contact report.
+Jolt's state then does not change from one step to the next, so
+`run_ticks(n)` advances the tick count and simulation time by `n` and
+publishes one snapshot of the new tick (with no changed rows) on the calling
+thread, without waking the world thread. The decision is made per call: a
+call that a waiting batch, a due `at_tick` or an awake body would act on
+steps every tick, and a woken world plays out bitwise as one stepped through
+the quiet ticks. `stats()['quiet_ticks']` counts the ticks counted this way.
+
 After a tick that adds 256 or more static bodies, the world thread rebuilds
 the broad phase's trees (`PhysicsSystem::OptimizeBroadPhase`) once, the next
 time it has no tick due: before waiting in lockstep, or in the time before
@@ -99,7 +110,7 @@ A frozen dataclass; every field has a default.
 | `lockstep` | True unless `start()` is free-running the world |
 | `error` | the exception a callback raised, or None |
 | `submitted_seq` | the sequence number of the last batch submitted |
-| `stats()` | counters (`ticks`, `dropped_ticks`, `events_dropped`, `events_held` in the ring until the next drain, `rejected`, `pool`, `bodies` in the world, `queued_bodies` submitted and not yet applied, `shapes` registered, `broadphase_optimizations`, `idle`, `running`) `characters`, `queries` that waited for the world lock, and mean milliseconds a tick since `reset_stats()` (`apply_ms`, `characters_ms`, `step_ms`, `events_ms`, `publish_ms`, `callbacks_ms`, `tick_ms`), with `query_wait_ms` and `query_wait_max_ms`, the mean and longest wait of a query for the world lock |
+| `stats()` | counters (`ticks`, `dropped_ticks`, `events_dropped`, `events_held` in the ring until the next drain, `rejected`, `pool`, `bodies` in the world, `queued_bodies` submitted and not yet applied, `shapes` registered, `broadphase_optimizations`, `idle`, `running`) `characters`, `queries` that waited for the world lock, and mean milliseconds a tick since `reset_stats()` (`apply_ms`, `characters_ms`, `step_ms`, `events_ms`, `publish_ms`, `callbacks_ms`, `tick_ms`), `quiet_ticks` counted without stepping since `reset_stats()`, with `query_wait_ms` and `query_wait_max_ms`, the mean and longest wait of a query for the world lock |
 
 ## Commands
 

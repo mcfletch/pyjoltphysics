@@ -155,11 +155,12 @@ class Snapshot:
     row into its place.
     """
 
-    __slots__ = ('_native', '_rows')
+    __slots__ = ('_native', '_row_table', '_rows')
 
     def __init__(self, native: _native.Snapshot) -> None:
         self._native = native
         self._rows: dict[int, int] | None = None
+        self._row_table: npt.NDArray[np.int64] | None = None
 
     def __repr__(self) -> str:
         return '<Snapshot tick=%d bodies=%d applied_seq=%d>' % (
@@ -240,8 +241,20 @@ class Snapshot:
 
     def rows_of(self, uids: npt.ArrayLike) -> npt.NDArray[np.int64]:
         """Return the row of each uid, -1 for a uid that is not a body in this snapshot."""
-        table = self.rows
-        return np.array([table.get(int(u), -1) for u in np.atleast_1d(np.asarray(uids))], np.int64)
+        wanted = np.atleast_1d(np.asarray(uids)).astype(np.int64, copy=False)
+        if self._row_table is None:
+            # Uids are assigned in order from 1, so a table indexed by uid stays near the body count.
+            held = self._native.uid
+            table = np.full(int(held.max()) + 1 if len(held) else 0, -1, dtype=np.int64)
+            table[held] = np.arange(len(held), dtype=np.int64)
+            self._row_table = table
+        table = self._row_table
+        inside = (wanted >= 0) & (wanted < len(table))
+        if inside.all():
+            return table[wanted]
+        found = np.full(len(wanted), -1, dtype=np.int64)
+        found[inside] = table[wanted[inside]]
+        return found
 
     @property
     def characters(self) -> CharacterRows:

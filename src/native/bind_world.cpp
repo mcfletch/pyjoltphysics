@@ -457,6 +457,7 @@ nb::dict stats(const World &world) {
     out["callbacks_ms"] = s.callbacks_ms;
     out["tick_ms"] = s.tick_ms;
     out["timed_ticks"] = s.timed_ticks;
+    out["quiet_ticks"] = s.quiet_ticks;
     return out;
 }
 
