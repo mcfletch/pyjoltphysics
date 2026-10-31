@@ -732,7 +732,7 @@ void WorldCore::apply(AddSoftBody &add, uint64_t index) {
     const SoftBodyDesc &desc = add.desc;
     const double *p = desc.params.data();
     JPH::SoftBodyCreationSettings settings;
-    settings.mSettings = soft_settings(desc);
+    settings.mSettings = desc.shared;
     settings.mPosition = JPH::RVec3(p[kSoftX], p[kSoftY], p[kSoftZ]);
     settings.mRotation = JPH::Quat(float(p[kSoftQX]), float(p[kSoftQY]), float(p[kSoftQZ]), float(p[kSoftQW])).Normalized();
     const auto flags = uint32_t(p[kSoftFlags]);

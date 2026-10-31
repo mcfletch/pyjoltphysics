@@ -1221,8 +1221,9 @@ std::pair<uint32_t, uint64_t> add_soft_body(World &world, const Doubles &params,
     if (d.params[kSoftPressure] > 0.0 && d.faces.empty())
         throw std::invalid_argument("a soft body with pressure has faces");
     d.pins = soft_pins(pin_vertex, pin_body, pin_point, n);
-    // The settings are built now, on the calling thread, so a fault is raised here.
-    soft_settings(d);
+    // The settings are built now, on the calling thread: a fault is raised here
+    // and the world thread only creates the body.
+    d.shared = soft_settings(d);
     Uid uid = 0;
     const uint64_t seq = world.core().submit(Command(std::move(add)), at_tick, &uid);
     return {uid, seq};

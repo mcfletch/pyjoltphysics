@@ -72,6 +72,8 @@ struct SoftBodyDesc {
     std::vector<float> edge_compliance;  // (E,)
     std::vector<uint32_t> tetrahedra; // (T, 4)
     std::vector<SoftPin> pins;
+    // Built from the rest when the batch is submitted, on the submitting thread.
+    JPH::Ref<JPH::SoftBodySharedSettings> shared;
     size_t vertex_count() const { return positions.size() / 3; }
 };
 
