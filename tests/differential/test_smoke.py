@@ -2,7 +2,8 @@
 
 Two solvers never agree to the bit, so each scene names what is compared and
 the tolerance: rest heights to 1 cm, a stack's sideways drift under 5 cm and
-its top height to 5 cm, and a bounce's rebound ratios to 0.05.
+its top height to 5 cm, and a bounce's rebound ratios to 0.05. omi_physics'
+side is its recorded answer (:func:`differential.engines.reference`).
 """
 
 from __future__ import annotations
@@ -12,10 +13,8 @@ from typing import Any
 import numpy as np
 import pytest
 
+from differential.engines import reference
 from pyjoltphysics import BodyBatch, World, WorldSettings
-
-omi = pytest.importorskip('omi_physics.world', reason='omi_physics is the reference engine')
-model = pytest.importorskip('omi_physics.model')
 
 pytestmark = pytest.mark.differential
 
@@ -24,6 +23,9 @@ FRICTION = 0.6
 
 
 def omi_ground(restitution: float = 0.0) -> tuple[Any, int]:
+    from omi_physics import model  # noqa: PLC0415 omi_physics is optional: the recorded answers stand in
+    from omi_physics import world as omi  # noqa: PLC0415 omi_physics is optional: the recorded answers stand in
+
     world = omi.PhysicsWorld(gravity=model.Gravity(gravity=9.81, direction=(0, -1, 0)), fixed_dt=DT)
     material = world.add_material(
         model.Material(staticFriction=FRICTION, dynamicFriction=FRICTION, restitution=restitution)
@@ -38,6 +40,8 @@ def omi_ground(restitution: float = 0.0) -> tuple[Any, int]:
 
 
 def omi_heights(restitution: float, ticks: int) -> np.ndarray:
+    from omi_physics import model  # noqa: PLC0415 omi_physics is optional: the recorded answers stand in
+
     world, material = omi_ground(restitution)
     sphere = world.add_shape(model.Shape.sphere(0.5))
     body = world.add_body(
@@ -75,13 +79,16 @@ def apexes(heights: np.ndarray) -> np.ndarray:
 
 
 def test_a_sphere_dropped_on_a_plane_rests_at_its_radius() -> None:
-    omi_rest = omi_heights(0.0, 600)[-1]
+    omi_rest = reference('smoke/rest', lambda: omi_heights(0.0, 600)[-1])
     jolt_rest = jolt_heights(0.0, 600)[-1]
     assert jolt_rest == pytest.approx(0.5, abs=0.01)
     assert jolt_rest == pytest.approx(omi_rest, abs=0.01)
 
 
-def test_a_stack_of_ten_boxes_settles_upright() -> None:
+def omi_stack() -> tuple[float, float]:
+    """omi's stack of ten after 2 s: the worst sideways drift and the top box's height."""
+    from omi_physics import model  # noqa: PLC0415 omi_physics is optional: the recorded answers stand in
+
     world, material = omi_ground()
     box = world.add_shape(model.Shape.box((1, 1, 1)))
     bodies = [
@@ -94,7 +101,12 @@ def test_a_stack_of_ten_boxes_settles_upright() -> None:
     ]
     for _ in range(240):
         world.step(DT)
-    omi_poses = np.array([world.position[b] for b in bodies])
+    poses = np.array([world.position[b] for b in bodies])
+    return float(np.abs(poses[:, [0, 2]]).max()), float(poses[-1, 1])
+
+
+def test_a_stack_of_ten_boxes_settles_upright() -> None:
+    omi_drift, omi_top = reference('smoke/stack', omi_stack)
     with World(WorldSettings(threads=1)) as jolt:
         jolt.add_bodies(BodyBatch.plane(friction=FRICTION))
         uids, _ = jolt.add_bodies(
@@ -106,18 +118,22 @@ def test_a_stack_of_ten_boxes_settles_upright() -> None:
         snapshot = jolt.latest()
         assert snapshot is not None
         jolt_poses = snapshot.position[snapshot.rows_of(uids)]
-    for poses in (omi_poses, jolt_poses):
-        assert np.abs(poses[:, [0, 2]]).max() < 0.05
-    assert jolt_poses[-1, 1] == pytest.approx(omi_poses[-1, 1], abs=0.05)
+    assert np.abs(jolt_poses[:, [0, 2]]).max() < 0.05
+    assert omi_drift < 0.05
+    assert jolt_poses[-1, 1] == pytest.approx(omi_top, abs=0.05)
 
 
 @pytest.mark.parametrize('restitution', [0.5, 0.8])
 def test_a_bounce_rebounds_as_high(restitution: float) -> None:
     rest = 0.5
-    ratios = []
-    for heights in (omi_heights(restitution, 600), jolt_heights(restitution, 600)):
+
+    def ratios(heights: np.ndarray) -> tuple[float, float]:
         peaks = apexes(heights)[:2] - rest
-        ratios.append((peaks[0] / (3.0 - rest), peaks[1] / peaks[0]))
-    (omi_first, omi_second), (jolt_first, jolt_second) = ratios
+        return float(peaks[0] / (3.0 - rest)), float(peaks[1] / peaks[0])
+
+    omi_first, omi_second = reference(
+        f'smoke/bounce/{restitution}', lambda: ratios(omi_heights(restitution, 600))
+    )
+    jolt_first, jolt_second = ratios(jolt_heights(restitution, 600))
     assert jolt_first == pytest.approx(omi_first, abs=0.05)
     assert jolt_second == pytest.approx(omi_second, abs=0.05)

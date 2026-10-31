@@ -238,7 +238,13 @@ def reference(key: str, compute: Callable[[], Any]) -> Any:
     recording = os.environ.get(RECORD)
     if recording:
         _recorded[key] = _plain(compute())
-        Path(recording).write_text(json.dumps(_recorded, indent=1, sort_keys=True) + '\n')
+        Path(recording).write_text(
+            '{\n%s\n}\n'
+            % ',\n'.join(
+                '%s: %s' % (json.dumps(name), json.dumps(_recorded[name]))
+                for name in sorted(_recorded)
+            )
+        )
         return _recorded[key]
     if not _recorded:
         _recorded.update(json.loads(GOLDEN.read_text()))

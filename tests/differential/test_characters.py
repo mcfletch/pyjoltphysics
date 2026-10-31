@@ -5,7 +5,8 @@ it goes: across a height field for 10 s, up a flight of stairs, up a walkable
 slope and against a steep one, a jump's flight at gravity 42 and a fall's
 landing. The two collide differently (Jolt's capsule keeps a 2 cm skin and
 meets a height field's triangles; omi's meets its bilinear surface), so each
-test states its band.
+test states its band. omi_physics' track is its recorded answer
+(:func:`differential.engines.reference`).
 """
 
 from __future__ import annotations
@@ -16,11 +17,8 @@ from typing import Any
 
 import numpy as np
 import pytest
-from omi_physics import model
-from omi_physics import world as omi
-from omi_physics.character import CharacterCapabilities as OmiCaps
-from omi_physics.character import CharacterController
 
+from differential.engines import reference
 from pyjoltphysics import (
     BodyBatch,
     CharacterCapabilities,
@@ -107,6 +105,15 @@ def run_omi(
     snap: bool = True,
     **caps: Any,
 ) -> Track:
+    from omi_physics import model  # noqa: PLC0415 omi_physics is optional: the recorded answers stand in
+    from omi_physics import world as omi  # noqa: PLC0415 omi_physics is optional: the recorded answers stand in
+    from omi_physics.character import (  # noqa: PLC0415 omi_physics is optional: the recorded answers stand in
+        CharacterCapabilities as OmiCaps,
+    )
+    from omi_physics.character import (  # noqa: PLC0415 omi_physics is optional: the recorded answers stand in
+        CharacterController,
+    )
+
     world = omi.PhysicsWorld(gravity=model.Gravity(gravity=gravity, direction=(0, -1, 0)))
     for size, centre in ground.boxes:
         shape = world.add_shape(model.Shape.box(size))
@@ -136,8 +143,15 @@ def run_omi(
     return Track(np.array(feet), np.array(grounded))
 
 
-def both(*args: Any, **kwargs: Any) -> tuple[Track, Track]:
-    return run_jolt(*args, **kwargs), run_omi(*args, **kwargs)
+def both(key: str, *args: Any, **kwargs: Any) -> tuple[Track, Track]:
+    """Jolt's track and omi_physics' recorded one, ``key`` naming the recording."""
+
+    def omi_track() -> list[Any]:
+        track = run_omi(*args, **kwargs)
+        return [track.feet, track.grounded]
+
+    feet, grounded = reference('characters/' + key, omi_track)
+    return run_jolt(*args, **kwargs), Track(np.array(feet), np.array(grounded, dtype=bool))
 
 
 def landscape() -> Ground:
@@ -161,7 +175,7 @@ def test_a_run_across_a_height_field_for_ten_seconds_ends_in_one_place() -> None
     ground = landscape()
     assert ground.field is not None
     start = (-50.0, float(ground.field[0][64, 14]), 0.0)
-    jolt, omi_ = both(ground, start, 10.0, move=(1.0, 0.0, 0.3), mode='run')
+    jolt, omi_ = both('heightfield', ground, start, 10.0, move=(1.0, 0.0, 0.3), mode='run')
     # 6 m/s along the ground for 10 s; both stay on the surface throughout.
     assert jolt.grounded[30:].all() and omi_.grounded[30:].all()
     assert np.linalg.norm(jolt.feet[-1] - omi_.feet[-1]) < 0.1
@@ -177,7 +191,7 @@ def test_a_flight_of_stairs_is_climbed_by_both_at_walking_pace() -> None:
     ]
     top = ((10.0, 1.2, 4.0), (2.0 + 2.4 + 5.0, 0.6, 0.0))
     ground = Ground(boxes=[floor, *steps, top])
-    jolt, omi_ = both(ground, (0.0, 0.0, 0.0), 3.0, move=(1.0, 0.0, 0.0), stepHeight=0.35)
+    jolt, omi_ = both('stairs', ground, (0.0, 0.0, 0.0), 3.0, move=(1.0, 0.0, 0.0), stepHeight=0.35)
     assert jolt.feet[-1, 1] == pytest.approx(1.2, abs=0.05)
     assert omi_.feet[-1, 1] == pytest.approx(1.2, abs=0.05)
     assert jolt.feet[-1, 0] == pytest.approx(omi_.feet[-1, 0], abs=0.6)
@@ -185,7 +199,9 @@ def test_a_flight_of_stairs_is_climbed_by_both_at_walking_pace() -> None:
 
 @pytest.mark.parametrize(('degrees', 'climbs'), [(30.0, True), (60.0, False)])
 def test_a_slope_is_climbed_or_refused_by_both(degrees: float, climbs: bool) -> None:
-    jolt, omi_ = both(ramp(degrees), (0.0, 0.0, 0.0), 3.0, move=(1.0, 0.0, 0.0), maxSlope=50.0)
+    jolt, omi_ = both(
+        f'slope/{degrees}', ramp(degrees), (0.0, 0.0, 0.0), 3.0, move=(1.0, 0.0, 0.0), maxSlope=50.0
+    )
     for track in (jolt, omi_):
         assert bool(track.feet[-1, 1] > 2.0) is climbs
     if climbs:
@@ -212,7 +228,7 @@ def test_a_jump_at_gravity_42_flies_the_same_parabola_in_both() -> None:
         'coyoteTime': 0.0,
         'jumpBuffer': 0.0,
     }
-    jolt, omi_ = both(floor, (0.0, 0.0, 0.0), 1.0, **kw)
+    jolt, omi_ = both('jump', floor, (0.0, 0.0, 0.0), 1.0, **kw)
     j = jolt.feet[:, 1] - jolt.feet[9, 1]
     o = omi_.feet[:, 1] - omi_.feet[9, 1]
     flight = ~jolt.grounded & ~omi_.grounded
@@ -226,7 +242,7 @@ def test_a_jump_at_gravity_42_flies_the_same_parabola_in_both() -> None:
 
 def test_a_fall_from_five_metres_lands_at_the_same_tick_in_both() -> None:
     floor = Ground(boxes=[((40.0, 1.0, 40.0), (0.0, -0.5, 0.0))])
-    jolt, omi_ = both(floor, (0.0, 5.0, 0.0), 1.5, snap=False)
+    jolt, omi_ = both('fall', floor, (0.0, 5.0, 0.0), 1.5, snap=False)
     assert int(np.argmax(jolt.grounded)) == pytest.approx(int(np.argmax(omi_.grounded)), abs=1)
     assert jolt.feet[-1, 1] == pytest.approx(omi_.feet[-1, 1], abs=0.03)
     falling = ~jolt.grounded & ~omi_.grounded
@@ -242,7 +258,12 @@ def test_a_ledge_twice_the_step_height_is_refused_by_jolt_and_climbed_by_omi() -
     floor = ((60.0, 1.0, 60.0), (0.0, -0.5, 0.0))
     ledge = ((40.0, 0.6, 40.0), (21.5, 0.3, 0.0))
     jolt, omi_ = both(
-        Ground(boxes=[floor, ledge]), (0.0, 0.0, 0.0), 3.0, move=(1.0, 0.0, 0.0), mode='run'
+        'ledge',
+        Ground(boxes=[floor, ledge]),
+        (0.0, 0.0, 0.0),
+        3.0,
+        move=(1.0, 0.0, 0.0),
+        mode='run',
     )
     assert jolt.feet[-1, 1] == pytest.approx(0.0, abs=0.02)
     assert jolt.feet[-1, 0] < 1.5 - 0.3 + 0.05
