@@ -68,7 +68,7 @@ snapshot array. Soft bodies are Jolt's: cloth, ropes, pressure balls and any
 triangle mesh, pinned to world points or to moving bodies, blown by wind,
 colliding with rigid bodies, their vertices and normals float32 views in the
 snapshot rewritten only when they moved. Twenty ragdolls and five cloths of
-1,024 vertices take 0.89 ms a 60 Hz tick on 8 job threads.
+1,024 vertices take 0.46 ms a 60 Hz tick on 8 job threads (median of four).
 `docs/API.md` describes every call.
 
 The build information:
