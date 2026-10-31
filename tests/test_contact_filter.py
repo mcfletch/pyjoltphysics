@@ -188,3 +188,24 @@ def test_either_asks_where_one_body_carries_the_flag(make_world: MakeWorld) -> N
     assert asked == [(wall, ball)] or asked == [(min(wall, ball), max(wall, ball))]
     snap = latest(world)
     assert snap.position[snap.rows[ball], 0] > 1.5
+
+
+def test_recheck_asks_a_refused_pair_again(make_world: MakeWorld) -> None:
+    world = make_world(tick_hz=60.0, threads=1)
+    allowed = threading.Event()
+    asked: list[int] = []
+
+    def verdict(a: int, b: int, point: object, normal: object, approach: float) -> bool:
+        asked.append(a)
+        return allowed.is_set()
+
+    world.set_contact_filter(verdict, recheck=True)
+    world.add_bodies(floor(10.0, flags=BodyFlag.FILTER_CONTACTS))
+    (ball,), _ = world.add_bodies(BodyBatch.spheres([(0.0, 0.5, 0.0)], radius=0.5,
+                                                    flags=BodyFlag.FILTER_CONTACTS))
+    world.run_ticks(5)
+    assert len(asked) >= 4
+    allowed.set()
+    world.run_ticks(120)
+    snap = latest(world)
+    assert snap.position[snap.rows[ball], 1] > -0.5

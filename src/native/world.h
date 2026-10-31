@@ -170,6 +170,8 @@ public:
     ShapeLibrary &shapes() { return shapes_; }
     // Whether the contact filter is asked where either body carries FILTER_CONTACTS.
     void set_filter_either(bool either) { collector_.filter_either.store(either); }
+    // Whether a pair the contact filter refused is asked again at each later step.
+    void set_filter_recheck(bool recheck) { filter_recheck_.store(recheck); }
 
     // The bodies' and constraints' state as Jolt's StateRecorder writes it,
     // read between ticks under the world lock; callers release the GIL.
@@ -342,6 +344,7 @@ private:
     };
     std::mutex verdict_lock_;
     std::unordered_map<uint64_t, Verdict> verdicts_;
+    std::atomic<bool> filter_recheck_{false};
     uint32_t verdict_tick_ = 0;
     std::mutex job_python_lock_;
     std::unordered_map<std::thread::id, PyThreadState *> job_python_;

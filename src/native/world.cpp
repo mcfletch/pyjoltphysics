@@ -650,7 +650,9 @@ bool WorldCore::solve_pair(const JPH::Body &body1, const JPH::Body &body2, JPH::
     {
         std::lock_guard<std::mutex> guard(verdict_lock_);
         auto found = verdicts_.find(key);
-        if (found != verdicts_.end()) {
+        // With recheck a refusal holds for the step that made it, and the pair is asked again.
+        if (found != verdicts_.end() &&
+            (found->second.solve || !filter_recheck_.load() || found->second.tick == verdict_tick_)) {
             found->second.tick = verdict_tick_;
             return found->second.solve;
         }
@@ -706,7 +708,8 @@ bool WorldCore::solve_pair(const JPH::Body &body1, const JPH::Body &body2, JPH::
         PyEval_SaveThread();
     std::lock_guard<std::mutex> guard(verdict_lock_);
     auto [found, made] = verdicts_.try_emplace(key, Verdict{solve, verdict_tick_});
-    (void)made;
+    if (!made && filter_recheck_.load())
+        found->second = Verdict{solve, verdict_tick_};
     return found->second.solve;
 }
 

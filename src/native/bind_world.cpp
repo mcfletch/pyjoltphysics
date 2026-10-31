@@ -1431,12 +1431,13 @@ void bind_world(nb::module_ &m) {
             nb::arg("fn").none())
         .def(
             "set_contact_filter",
-            [](World &w, nb::object fn, bool either) {
+            [](World &w, nb::object fn, bool either, bool recheck) {
                 w.core().set_filter_either(either);
+                w.core().set_filter_recheck(recheck);
                 CallbackSet &c = w.core().callbacks();
                 c.set(c.contact_filter, c.has_contact_filter, std::move(fn));
             },
-            nb::arg("fn").none(), nb::arg("either") = false)
+            nb::arg("fn").none(), nb::arg("either") = false, nb::arg("recheck") = false)
         .def("start", [](World &w) { w.core().start(); }, nb::call_guard<nb::gil_scoped_release>())
         .def("stop", [](World &w) { w.core().stop(); }, nb::call_guard<nb::gil_scoped_release>())
         .def(

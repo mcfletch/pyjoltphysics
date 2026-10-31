@@ -913,11 +913,14 @@ class World:
         )
 
     def set_contact_filter(
-        self, fn: ContactFilter | None, either: bool = False
+        self, fn: ContactFilter | None, either: bool = False, recheck: bool = False
     ) -> ContactFilter | None:
         """Ask ``fn`` about pairs whose bodies both carry ``BodyFlag.FILTER_CONTACTS`` as they first touch.
 
         With ``either``, a pair is asked about where either body carries it.
+        With ``recheck``, a refusal holds for the step that made it and the
+        pair is asked again at each later step it meets, so a rule that
+        changes from step to step lets a refused pair collide.
 
         ``fn(a, b, point, normal, approach)`` runs on the Jolt job thread that
         found the pair, inside the step, once per pair: the answer holds until
@@ -926,7 +929,7 @@ class World:
         (``RuntimeError``) or wait for it. An exception stops the world, as
         from any callback. None removes it.
         """
-        self._native.set_contact_filter(fn, bool(either))
+        self._native.set_contact_filter(fn, bool(either), bool(recheck))
         return fn
 
     # -- gravity zones, drag, kinematic tracks -------------------------------
