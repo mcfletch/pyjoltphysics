@@ -84,6 +84,7 @@ set(PYJOLTPHYSICS_SOURCES
   src/native/seams.cpp
   src/native/shapes.cpp
   src/native/snapshot.cpp
+  src/native/vehicles.cpp
   src/native/world.cpp)
 nanobind_add_module(_native NB_STATIC STABLE_ABI FREE_THREADED NOMINSIZE
   ${PYJOLTPHYSICS_SOURCES})

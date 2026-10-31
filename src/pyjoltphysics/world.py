@@ -42,6 +42,7 @@ from pyjoltphysics.materials import MaterialTable
 from pyjoltphysics.queries import ALL_GROUPS, DEFAULT_FILTER, QueryFilter, RayHit, RayHits, ShapeHit
 from pyjoltphysics.settings import WorldSettings
 from pyjoltphysics.shapes import Shape, ShapeInfo
+from pyjoltphysics.vehicles import Vehicle, VehicleRows, VehicleSettings
 
 __all__ = [
     'BodiesState',
@@ -265,6 +266,11 @@ class Snapshot:
     def joints(self) -> JointRows:
         """Every joint, as read-only views; see :class:`~pyjoltphysics.JointRows`."""
         return JointRows(self._native)
+
+    @property
+    def vehicles(self) -> VehicleRows:
+        """Every vehicle and its wheels, as read-only views; see :class:`~pyjoltphysics.VehicleRows`."""
+        return VehicleRows(self._native)
 
     def includes(self, seq: int) -> bool:
         """True when the batch with sequence number ``seq``, and every batch before it, is applied."""
@@ -837,6 +843,69 @@ class World:
     def set_character_ignore(self, cid: int, uids: Iterable[int], at_tick: int = 0) -> int:
         """Queue the set of bodies a character passes through."""
         return self._native.set_character_ignore(int(cid), _uids(list(uids)), at_tick)
+
+    # -- vehicles ----------------------------------------------------------
+
+    def add_vehicle(self, chassis: int, settings: VehicleSettings, at_tick: int = 0) -> Vehicle:
+        """Queue a vehicle on the dynamic body ``chassis``; return its :class:`Vehicle`.
+
+        The vehicle id is assigned now. A chassis that is not a dynamic body
+        when the batch is applied, or a tracked vehicle with a side holding
+        no wheel, is skipped and counted in ``stats()['rejected']``.
+        """
+        vid, _ = self._native.add_vehicle(int(chassis), at_tick=at_tick, **settings.native())
+        return Vehicle(self, vid, int(chassis))
+
+    def remove_vehicles(self, ids: npt.ArrayLike, at_tick: int = 0) -> int:
+        """Queue removing vehicles; their chassis bodies stay. Removing a chassis removes its vehicle."""
+        return self._native.remove_vehicles(_uids(ids), at_tick)
+
+    def vehicle_inputs(self, ids: npt.ArrayLike, values: npt.ArrayLike, at_tick: int = 0) -> int:
+        """Queue inputs for many vehicles: one (throttle, steer, brake, handbrake) row each.
+
+        Held from the next tick until changed; see :meth:`Vehicle.set_input
+        <pyjoltphysics.Vehicle.set_input>` for the ranges.
+        """
+        ids_ = _uids(ids)
+        rows = np.ascontiguousarray(values, dtype=np.float32).reshape(len(ids_), 4)
+        return self._native.vehicle_inputs(ids_, rows, at_tick)
+
+    def set_vehicle_surfaces(
+        self,
+        ids: npt.ArrayLike,
+        wheels: npt.ArrayLike,
+        grip: Sequence[float | None],
+        rolling: npt.ArrayLike,
+        at_tick: int = 0,
+    ) -> int:
+        """Queue surfaces under vehicles' wheels: one (vehicle, wheel or -1 for all, grip, rolling) a row.
+
+        A grip of None gives those wheels back to the surface table.
+        """
+        ids_ = _uids(ids)
+        n = len(ids_)
+        grips = np.array([math.nan if g is None else float(g) for g in grip], dtype=np.float32)
+        return self._native.set_vehicle_surfaces(
+            ids_,
+            _column(wheels, n, np.int32, 'wheels'),
+            grips,
+            _column(rolling, n, np.float32, 'rolling'),
+            at_tick,
+        )
+
+    def set_surface_table(
+        self, grip: npt.ArrayLike, rolling: npt.ArrayLike, at_tick: int = 0
+    ) -> int:
+        """Queue the grip and rolling resistance a wheel meets on each material index.
+
+        Entry ``i`` serves wheels on bodies of material index ``i`` that have
+        no surface of their own; indices past the table give grip 1 and no
+        extra rolling resistance.
+        """
+        grips = np.ascontiguousarray(grip, dtype=np.float32).reshape(-1)
+        return self._native.set_surface_table(
+            grips, _column(rolling, len(grips), np.float32, 'rolling'), at_tick
+        )
 
     # -- joints ------------------------------------------------------------
 

@@ -16,7 +16,16 @@ from pyjoltphysics.bodies import BodyBatch
 from pyjoltphysics.enums import MotionType
 from pyjoltphysics.world import Snapshot, World
 
-__all__ = ['Digest', 'MakeWorld', 'character_digest', 'floor', 'grid', 'latest', 'pose_digest']
+__all__ = [
+    'Digest',
+    'MakeWorld',
+    'character_digest',
+    'floor',
+    'grid',
+    'latest',
+    'pose_digest',
+    'vehicle_digest',
+]
 
 #: The ``make_world(**settings)`` factory the test suites' fixture returns.
 MakeWorld = Callable[..., World]
@@ -86,6 +95,31 @@ def character_digest(snapshot: Snapshot, digest: D) -> D:
         rows.state,
         rows.ground_uid,
         rows.slide_progress,
+    ):
+        out.update(np.ascontiguousarray(array).tobytes())
+    return out
+
+
+def vehicle_digest(snapshot: Snapshot, digest: D) -> D:
+    """Return ``digest`` updated with every vehicle's engine, gear and wheels.
+
+    The body poses go in too, by :func:`pose_digest`.
+    """
+    out = pose_digest(snapshot, digest)
+    rows = snapshot.vehicles
+    wheels = rows.wheels
+    for array in (
+        rows.id,
+        rows.rpm,
+        rows.gear,
+        rows.steer,
+        rows.impact_speed,
+        wheels.position,
+        wheels.orientation,
+        wheels.length,
+        wheels.spin,
+        wheels.slip,
+        wheels.ground,
     ):
         out.update(np.ascontiguousarray(array).tobytes())
     return out

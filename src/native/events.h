@@ -36,7 +36,7 @@ class BodyInterface;
 
 namespace pj {
 
-enum class EventKind : uint8_t { Contact = 0, Trigger = 1, State = 2, Character = 3, Joint = 4 };
+enum class EventKind : uint8_t { Contact = 0, Trigger = 1, State = 2, Character = 3, Joint = 4, Vehicle = 5 };
 // A character's records: begin and end of a touch with body b, a landing on
 // b (approach is the speed), a jump (approach is the launch speed), a slide
 // begun, knocked down, got up.
@@ -44,6 +44,10 @@ enum class EventPhase : uint8_t {
     Begin = 0, Persist = 1, End = 2, Sleep = 3, Wake = 4,
     Land = 5, Jump = 6, Slide = 7, Down = 8, Up = 9,
     Break = 10,  // a joint broke: a is the joint, approach the force (N), impulse the torque (N m)
+    // A vehicle's heaviest blow of a tick: a is the vehicle, b the body struck, approach the
+    // closing speed (m/s), impulse the estimated impulse (N s), normal from the chassis into b.
+    Impact = 11,
+    Crash = 12,  // an impact at or above the vehicle's crash speed
 };
 enum class EndReason : uint16_t { None = 0, Removed = 1 };
 

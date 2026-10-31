@@ -55,6 +55,21 @@ from pyjoltphysics.materials import Material, MaterialTable
 from pyjoltphysics.queries import ALL_GROUPS, QueryFilter, RayHit, RayHits, ShapeHit
 from pyjoltphysics.settings import WorldSettings
 from pyjoltphysics.shapes import Shape, ShapeInfo, heightfield_side
+from pyjoltphysics.vehicles import (
+    AntiRollBar,
+    Differential,
+    Engine,
+    Lean,
+    Transmission,
+    Vehicle,
+    VehicleKind,
+    VehicleRows,
+    VehicleSettings,
+    VehicleTrack,
+    WheelCast,
+    WheelRows,
+    WheelSettings,
+)
 from pyjoltphysics.world import (
     BodiesState,
     ContactFilter,
@@ -169,6 +184,20 @@ __all__ = [
     'CharacterRows',
     'CharacterState',
     'MoveMode',
+    # vehicles
+    'AntiRollBar',
+    'Differential',
+    'Engine',
+    'Lean',
+    'Transmission',
+    'Vehicle',
+    'VehicleKind',
+    'VehicleRows',
+    'VehicleSettings',
+    'VehicleTrack',
+    'WheelCast',
+    'WheelRows',
+    'WheelSettings',
     # events
     'EVENT_DTYPE',
     'EndReason',

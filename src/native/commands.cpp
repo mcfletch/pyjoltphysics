@@ -14,8 +14,16 @@ uint32_t uids_wanted(const Command &command) {
     return 0;
 }
 
-uint64_t CommandQueue::push(Batch &&batch, uint32_t uid_count, Uid *first_uid, JointId *first_joint) {
+uint64_t CommandQueue::push(Batch &&batch, uint32_t uid_count, Uid *first_uid, JointId *first_joint,
+                            VehicleId *vehicle) {
     std::lock_guard<std::mutex> guard(lock_);
+    if (auto *add = std::get_if<AddVehicle>(&batch.command)) {
+        if (next_vehicle_ == std::numeric_limits<VehicleId>::max())
+            throw std::length_error("the world has assigned every 32-bit vehicle id");
+        add->desc.id = next_vehicle_++;
+        if (vehicle)
+            *vehicle = add->desc.id;
+    }
     if (auto *joints = std::get_if<AddJoints>(&batch.command)) {
         if (uint64_t(next_joint_) + joints->joints.size() > std::numeric_limits<JointId>::max())
             throw std::length_error("the world has assigned every 32-bit joint id");

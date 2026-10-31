@@ -443,6 +443,7 @@ nb::dict stats(const World &world) {
     out["queued_bodies"] = s.queued_bodies;
     out["shapes"] = s.shapes;
     out["characters"] = s.characters;
+    out["vehicles"] = s.vehicles;
     out["characters_ms"] = s.characters_ms;
     out["queries"] = s.queries;
     out["query_wait_ms"] = s.query_wait_ms;
@@ -926,6 +927,121 @@ nb::ndarray<nb::numpy, const T, Shape> char_view(const Snapshot &s, const std::v
         return view<T, Shape>(values, {s.buffer->characters});
     return view<T, Shape>(values, {s.buffer->characters, width});
 }
+
+// -- vehicles -------------------------------------------------------------------------
+
+using Pairs = In<float, nb::shape<-1, 2>>;
+using Ints = In<int32_t, nb::shape<-1>>;
+
+std::vector<float> curve(const Pairs &pairs, const char *name) {
+    std::vector<float> out(pairs.data(), pairs.data() + pairs.size());
+    check_finite(out, name);
+    for (size_t i = 2; i < out.size(); i += 2)
+        if (!(out[i] > out[i - 2]))
+            throw std::invalid_argument(std::string(name) + " x values ascend");
+    return out;
+}
+
+std::pair<uint32_t, uint64_t> add_vehicle(World &world, Uid chassis, uint8_t kind, uint8_t cast, const Doubles &params,
+                                          const In<double, nb::shape<-1, kWheelParamCount>> &wheels,
+                                          const Pairs &torque_curve, const Pairs &longitudinal, const Pairs &lateral,
+                                          const Floats &gears, const Floats &reverse_gears,
+                                          const In<double, nb::shape<-1, 6>> &differentials,
+                                          const In<double, nb::shape<-1, 3>> &anti_roll_bars,
+                                          const In<double, nb::shape<2, 5>> &tracks, uint64_t at_tick) {
+    if (kind > uint8_t(VehicleKind::Tracked))
+        throw std::invalid_argument("unknown vehicle kind " + std::to_string(kind));
+    if (cast > uint8_t(WheelCast::Cylinder))
+        throw std::invalid_argument("unknown wheel cast " + std::to_string(cast));
+    if (params.shape(0) != kParamCount)
+        throw std::invalid_argument("params has " + std::to_string(params.shape(0)) + " values where " +
+                                    std::to_string(kParamCount) + " are needed");
+    AddVehicle add;
+    VehicleDesc &d = add.desc;
+    d.chassis = chassis;
+    d.kind = kind;
+    d.cast = cast;
+    d.params.assign(params.data(), params.data() + kParamCount);
+    for (size_t i = 0; i < kParamCount; ++i)
+        if (!std::isfinite(d.params[i]) && !(i == kDiffLimitedSlip && d.params[i] > 0))
+            throw std::invalid_argument("vehicle setting " + std::to_string(i) + " is not finite");
+    const size_t n = wheels.shape(0);
+    if (n == 0)
+        throw std::invalid_argument("a vehicle has at least one wheel");
+    d.wheels.assign(wheels.data(), wheels.data() + wheels.size());
+    check_finite(d.wheels, "wheels");
+    for (size_t i = 0; i < n; ++i) {
+        const std::string row = " (wheel " + std::to_string(i) + ")";
+        if (!(d.wheel(i, kRadius) > 0.0 && d.wheel(i, kWidth) >= 0.0))
+            throw std::invalid_argument("a wheel's radius is positive and its width not negative" + row);
+        if (!(d.wheel(i, kSuspensionMin) >= 0.0 && d.wheel(i, kSuspensionMax) >= d.wheel(i, kSuspensionMin)))
+            throw std::invalid_argument("a wheel's suspension lengths are 0 <= min <= max" + row);
+        if (!(d.wheel(i, kStiffness) > 0.0 && d.wheel(i, kDamping) >= 0.0))
+            throw std::invalid_argument("a wheel's spring stiffness is positive and its damping not negative" + row);
+        if (!(d.wheel(i, kWheelInertia) > 0.0))
+            throw std::invalid_argument("a wheel's inertia is positive" + row);
+    }
+    if (!(d.params[kMaxRpm] > d.params[kMinRpm] && d.params[kMinRpm] >= 0.0 && d.params[kMaxTorque] >= 0.0))
+        throw std::invalid_argument("an engine's rpm range is 0 <= min < max and its torque not negative");
+    if (!(d.params[kEngineInertia] > 0.0))
+        throw std::invalid_argument("an engine's inertia is positive");
+    d.torque_curve = curve(torque_curve, "torque_curve");
+    d.longitudinal = curve(longitudinal, "longitudinal_friction");
+    d.lateral = curve(lateral, "lateral_friction");
+    d.gears.assign(gears.data(), gears.data() + gears.size());
+    d.reverse_gears.assign(reverse_gears.data(), reverse_gears.data() + reverse_gears.size());
+    check_finite(d.gears, "gears");
+    check_finite(d.reverse_gears, "reverse_gears");
+    if (d.gears.empty() || d.reverse_gears.empty())
+        throw std::invalid_argument("a transmission has at least one forward and one reverse gear");
+    auto wheel_index = [&](double value, bool optional) {
+        const auto index = int(value);
+        if (double(index) != value || index >= int(n) || index < (optional ? -1 : 0))
+            throw std::invalid_argument("wheel index " + std::to_string(value) + " names no wheel");
+        return index;
+    };
+    for (size_t i = 0; i < differentials.shape(0); ++i) {
+        const double *r = differentials.data() + 6 * i;
+        DifferentialDesc &out = d.differentials.emplace_back();
+        out.left = wheel_index(r[0], true);
+        out.right = wheel_index(r[1], true);
+        out.ratio = float(r[2]);
+        out.split = float(r[3]);
+        out.limited_slip = float(r[4]);
+        out.torque_ratio = float(r[5]);
+    }
+    for (size_t i = 0; i < anti_roll_bars.shape(0); ++i) {
+        const double *r = anti_roll_bars.data() + 3 * i;
+        AntiRollBarDesc &out = d.anti_roll_bars.emplace_back();
+        out.left = wheel_index(r[0], false);
+        out.right = wheel_index(r[1], false);
+        out.stiffness = float(r[2]);
+        if (!(out.stiffness >= 0.0f))
+            throw std::invalid_argument("an anti-roll bar's stiffness is not negative");
+    }
+    for (int side = 0; side < 2; ++side) {
+        const double *r = tracks.data() + 5 * side;
+        TrackDesc &out = d.tracks[side];
+        out.driven = kind == uint8_t(VehicleKind::Tracked) ? wheel_index(r[0], false) : -1;
+        out.inertia = float(r[1]);
+        out.damping = float(r[2]);
+        out.brake_torque = float(r[3]);
+        out.ratio = float(r[4]);
+    }
+    VehicleId id = 0;
+    const uint64_t seq = world.core().submit(Command(std::move(add)), at_tick, nullptr, nullptr, &id);
+    return {id, seq};
+}
+
+template <typename T, typename Shape>
+nb::ndarray<nb::numpy, const T, Shape> veh_view(const Snapshot &s, const std::vector<T> &values, size_t width,
+                                                bool wheels) {
+    const size_t rows = wheels ? s.buffer->wheels : s.buffer->vehicles;
+    if (width == 1)
+        return view<T, Shape>(values, {rows});
+    return view<T, Shape>(values, {rows, width});
+}
+
 }  // namespace
 
 void bind_world(nb::module_ &m) {
@@ -1072,6 +1188,128 @@ void bind_world(nb::module_ &m) {
         .def_prop_ro(
             "joint_torque",
             [](const Snapshot &s) { return view<float, nb::shape<-1>>(s.buffer->joint_torque, {s.buffer->joints}); },
+            nb::rv_policy::reference_internal)
+        .def_prop_ro("vehicle_count", [](const Snapshot &s) { return s.buffer->vehicles; })
+        .def_prop_ro("wheel_count", [](const Snapshot &s) { return s.buffer->wheels; })
+        .def_prop_ro(
+            "vehicle_id",
+            [](const Snapshot &s) { return veh_view<uint32_t, nb::shape<-1>>(s, s.buffer->veh_id, 1, false); },
+            nb::rv_policy::reference_internal)
+        .def_prop_ro(
+            "vehicle_chassis",
+            [](const Snapshot &s) { return veh_view<Uid, nb::shape<-1>>(s, s.buffer->veh_chassis, 1, false); },
+            nb::rv_policy::reference_internal)
+        .def_prop_ro(
+            "vehicle_kind",
+            [](const Snapshot &s) { return veh_view<uint8_t, nb::shape<-1>>(s, s.buffer->veh_kind, 1, false); },
+            nb::rv_policy::reference_internal)
+        .def_prop_ro(
+            "vehicle_first_wheel",
+            [](const Snapshot &s) { return veh_view<uint32_t, nb::shape<-1>>(s, s.buffer->veh_first_wheel, 1, false); },
+            nb::rv_policy::reference_internal)
+        .def_prop_ro(
+            "vehicle_wheels",
+            [](const Snapshot &s) { return veh_view<uint32_t, nb::shape<-1>>(s, s.buffer->veh_wheels, 1, false); },
+            nb::rv_policy::reference_internal)
+        .def_prop_ro(
+            "vehicle_rpm",
+            [](const Snapshot &s) { return veh_view<float, nb::shape<-1>>(s, s.buffer->veh_rpm, 1, false); },
+            nb::rv_policy::reference_internal)
+        .def_prop_ro(
+            "vehicle_gear",
+            [](const Snapshot &s) { return veh_view<int8_t, nb::shape<-1>>(s, s.buffer->veh_gear, 1, false); },
+            nb::rv_policy::reference_internal)
+        .def_prop_ro(
+            "vehicle_forward_speed",
+            [](const Snapshot &s) { return veh_view<float, nb::shape<-1>>(s, s.buffer->veh_forward_speed, 1, false); },
+            nb::rv_policy::reference_internal)
+        .def_prop_ro(
+            "vehicle_steer",
+            [](const Snapshot &s) { return veh_view<float, nb::shape<-1>>(s, s.buffer->veh_steer, 1, false); },
+            nb::rv_policy::reference_internal)
+        .def_prop_ro(
+            "vehicle_impact_speed",
+            [](const Snapshot &s) { return veh_view<float, nb::shape<-1>>(s, s.buffer->veh_impact_speed, 1, false); },
+            nb::rv_policy::reference_internal)
+        .def_prop_ro(
+            "vehicle_impact_impulse",
+            [](const Snapshot &s) { return veh_view<float, nb::shape<-1>>(s, s.buffer->veh_impact_impulse, 1, false); },
+            nb::rv_policy::reference_internal)
+        .def_prop_ro(
+            "vehicle_impact_uid",
+            [](const Snapshot &s) { return veh_view<Uid, nb::shape<-1>>(s, s.buffer->veh_impact_uid, 1, false); },
+            nb::rv_policy::reference_internal)
+        .def_prop_ro(
+            "vehicle_input",
+            [](const Snapshot &s) { return veh_view<float, nb::shape<-1, 4>>(s, s.buffer->veh_input, 4, false); },
+            nb::rv_policy::reference_internal)
+        .def_prop_ro(
+            "wheel_vehicle",
+            [](const Snapshot &s) { return veh_view<uint32_t, nb::shape<-1>>(s, s.buffer->wheel_vehicle, 1, true); },
+            nb::rv_policy::reference_internal)
+        .def_prop_ro(
+            "wheel_position",
+            [](const Snapshot &s) { return veh_view<double, nb::shape<-1, 3>>(s, s.buffer->wheel_position, 3, true); },
+            nb::rv_policy::reference_internal)
+        .def_prop_ro(
+            "wheel_orientation",
+            [](const Snapshot &s) { return veh_view<float, nb::shape<-1, 4>>(s, s.buffer->wheel_orientation, 4, true); },
+            nb::rv_policy::reference_internal)
+        .def_prop_ro(
+            "wheel_length",
+            [](const Snapshot &s) { return veh_view<float, nb::shape<-1>>(s, s.buffer->wheel_length, 1, true); },
+            nb::rv_policy::reference_internal)
+        .def_prop_ro(
+            "wheel_compression",
+            [](const Snapshot &s) { return veh_view<float, nb::shape<-1>>(s, s.buffer->wheel_compression, 1, true); },
+            nb::rv_policy::reference_internal)
+        .def_prop_ro(
+            "wheel_steer",
+            [](const Snapshot &s) { return veh_view<float, nb::shape<-1>>(s, s.buffer->wheel_steer, 1, true); },
+            nb::rv_policy::reference_internal)
+        .def_prop_ro(
+            "wheel_angle",
+            [](const Snapshot &s) { return veh_view<float, nb::shape<-1>>(s, s.buffer->wheel_angle, 1, true); },
+            nb::rv_policy::reference_internal)
+        .def_prop_ro(
+            "wheel_spin",
+            [](const Snapshot &s) { return veh_view<float, nb::shape<-1>>(s, s.buffer->wheel_spin, 1, true); },
+            nb::rv_policy::reference_internal)
+        .def_prop_ro(
+            "wheel_load",
+            [](const Snapshot &s) { return veh_view<float, nb::shape<-1>>(s, s.buffer->wheel_load, 1, true); },
+            nb::rv_policy::reference_internal)
+        .def_prop_ro(
+            "wheel_slip",
+            [](const Snapshot &s) { return veh_view<float, nb::shape<-1, 2>>(s, s.buffer->wheel_slip, 2, true); },
+            nb::rv_policy::reference_internal)
+        .def_prop_ro(
+            "wheel_contact",
+            [](const Snapshot &s) { return veh_view<uint8_t, nb::shape<-1>>(s, s.buffer->wheel_contact, 1, true); },
+            nb::rv_policy::reference_internal)
+        .def_prop_ro(
+            "wheel_ground",
+            [](const Snapshot &s) { return veh_view<Uid, nb::shape<-1>>(s, s.buffer->wheel_ground, 1, true); },
+            nb::rv_policy::reference_internal)
+        .def_prop_ro(
+            "wheel_material",
+            [](const Snapshot &s) { return veh_view<uint16_t, nb::shape<-1>>(s, s.buffer->wheel_material, 1, true); },
+            nb::rv_policy::reference_internal)
+        .def_prop_ro(
+            "wheel_triangle",
+            [](const Snapshot &s) { return veh_view<int32_t, nb::shape<-1>>(s, s.buffer->wheel_triangle, 1, true); },
+            nb::rv_policy::reference_internal)
+        .def_prop_ro(
+            "wheel_grip",
+            [](const Snapshot &s) { return veh_view<float, nb::shape<-1>>(s, s.buffer->wheel_grip, 1, true); },
+            nb::rv_policy::reference_internal)
+        .def_prop_ro(
+            "wheel_contact_point",
+            [](const Snapshot &s) { return veh_view<double, nb::shape<-1, 3>>(s, s.buffer->wheel_contact_point, 3, true); },
+            nb::rv_policy::reference_internal)
+        .def_prop_ro(
+            "wheel_contact_normal",
+            [](const Snapshot &s) { return veh_view<float, nb::shape<-1, 3>>(s, s.buffer->wheel_contact_normal, 3, true); },
             nb::rv_policy::reference_internal)
         .def_prop_ro(
             "changed",
@@ -1318,6 +1556,49 @@ void bind_world(nb::module_ &m) {
                 return w.core().submit(Command(std::move(set)), at_tick);
             },
             nb::arg("ids"), nb::arg("enabled"), nb::arg("at_tick") = 0)
+        .def("add_vehicle", &add_vehicle, nb::arg("chassis"), nb::arg("kind"), nb::arg("cast"), nb::arg("params"),
+             nb::arg("wheels"), nb::arg("torque_curve"), nb::arg("longitudinal"), nb::arg("lateral"), nb::arg("gears"),
+             nb::arg("reverse_gears"), nb::arg("differentials"), nb::arg("anti_roll_bars"), nb::arg("tracks"),
+             nb::arg("at_tick") = 0, "Queue a vehicle on a dynamic chassis; return its id and the batch's sequence number.")
+        .def(
+            "remove_vehicles",
+            [](World &w, const Uids &ids, uint64_t at_tick) {
+                return w.core().submit(Command(RemoveVehicles{uids(ids)}), at_tick);
+            },
+            nb::arg("ids"), nb::arg("at_tick") = 0)
+        .def(
+            "vehicle_inputs",
+            [](World &w, const Uids &ids, const In<float, nb::shape<-1, 4>> &values, uint64_t at_tick) {
+                VehicleInputs inputs{uids(ids), copy<float>(values, ids.shape(0), "values")};
+                check_finite(inputs.values, "vehicle inputs");
+                return w.core().submit(Command(std::move(inputs)), at_tick);
+            },
+            nb::arg("ids"), nb::arg("values"), nb::arg("at_tick") = 0,
+            "Queue vehicle inputs (throttle, steer, brake, handbrake), held from the next tick.")
+        .def(
+            "set_vehicle_surfaces",
+            [](World &w, const Uids &ids, const Ints &wheel, const Floats &grip, const Floats &rolling,
+               uint64_t at_tick) {
+                const size_t n = ids.shape(0);
+                SetVehicleSurfaces set{uids(ids), copy<int32_t>(wheel, n, "wheel"), copy<float>(grip, n, "grip"),
+                                       copy<float>(rolling, n, "rolling")};
+                for (size_t i = 0; i < n; ++i)
+                    if (!(std::isnan(set.grip[i]) || (std::isfinite(set.grip[i]) && set.grip[i] >= 0.0f)) ||
+                        !std::isfinite(set.rolling[i]))
+                        throw std::invalid_argument("a surface's grip is NaN or not negative, its rolling finite");
+                return w.core().submit(Command(std::move(set)), at_tick);
+            },
+            nb::arg("ids"), nb::arg("wheel"), nb::arg("grip"), nb::arg("rolling"), nb::arg("at_tick") = 0)
+        .def(
+            "set_surface_table",
+            [](World &w, const Floats &grip, const Floats &rolling, uint64_t at_tick) {
+                const size_t n = grip.shape(0);
+                SetSurfaceTable set{copy<float>(grip, n, "grip"), copy<float>(rolling, n, "rolling")};
+                check_finite(set.grip, "grip");
+                check_finite(set.rolling, "rolling");
+                return w.core().submit(Command(std::move(set)), at_tick);
+            },
+            nb::arg("grip"), nb::arg("rolling"), nb::arg("at_tick") = 0)
         .def("set_material_table", &set_material_table, nb::arg("static_friction"), nb::arg("dynamic_friction"),
              nb::arg("restitution"), nb::arg("friction_combine"), nb::arg("restitution_combine"), nb::arg("pairs"),
              nb::arg("static_speed"), nb::arg("at_tick") = 0)

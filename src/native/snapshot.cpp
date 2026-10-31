@@ -46,6 +46,34 @@ void SnapshotBuffer::resize_joints(uint32_t count) {
     joint_torque.resize(count);
 }
 
+void SnapshotBuffer::resize_vehicles(uint32_t count, uint32_t wheel_count) {
+    vehicles = count;
+    wheels = wheel_count;
+    for (auto *v : {&veh_rpm, &veh_forward_speed, &veh_steer, &veh_impact_speed, &veh_impact_impulse})
+        v->resize(count);
+    veh_id.resize(count);
+    veh_chassis.resize(count);
+    veh_kind.resize(count);
+    veh_first_wheel.resize(count);
+    veh_wheels.resize(count);
+    veh_gear.resize(count);
+    veh_impact_uid.resize(count);
+    veh_input.resize(size_t(count) * 4);
+    for (auto *v : {&wheel_length, &wheel_compression, &wheel_steer, &wheel_angle, &wheel_spin, &wheel_load,
+                    &wheel_grip})
+        v->resize(wheel_count);
+    wheel_vehicle.resize(wheel_count);
+    wheel_position.resize(size_t(wheel_count) * 3);
+    wheel_orientation.resize(size_t(wheel_count) * 4);
+    wheel_slip.resize(size_t(wheel_count) * 2);
+    wheel_contact.resize(wheel_count);
+    wheel_ground.resize(wheel_count);
+    wheel_material.resize(wheel_count);
+    wheel_triangle.resize(wheel_count);
+    wheel_contact_point.resize(size_t(wheel_count) * 3);
+    wheel_contact_normal.resize(size_t(wheel_count) * 3);
+}
+
 void SnapshotPublisher::mark(uint32_t row) {
     if (mark_stamp_.size() <= row)
         mark_stamp_.resize(size_t(row) + 1024, 0);

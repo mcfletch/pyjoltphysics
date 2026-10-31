@@ -10,6 +10,7 @@
 #include "fields.h"
 #include "joints.h"
 #include "materials.h"
+#include "vehicles.h"
 
 #include <Jolt/Physics/Collision/Shape/Shape.h>
 
@@ -151,7 +152,8 @@ using Command = std::variant<AddBodies, RemoveBodies, SetTransforms, SetVelociti
                              AddCharacter, RemoveCharacters, CharacterOps, SetCharacterIgnore, AddJoints,
                              RemoveJoints, SetJointMotors, SetJointsEnabled, SetBodyMaterials, SetBodyFilters,
                              SetMaterialTable, SetFilterTable, SetGravityZones, SetDrag, SetTracks, MoveKinematic,
-                             SetMotion, SetFlags, RestoreState>;
+                             SetMotion, SetFlags, RestoreState, AddVehicle, RemoveVehicles, VehicleInputs,
+                             SetVehicleSurfaces, SetSurfaceTable>;
 
 // The uids a batch takes when it is submitted: one a body it adds, one a character.
 uint32_t uids_wanted(const Command &command);
@@ -172,7 +174,9 @@ public:
     // written into the batch, and the first is stored in `first_uid`. A batch
     // that adds joints takes consecutive joint ids, the first stored in
     // `first_joint`.
-    uint64_t push(Batch &&batch, uint32_t uid_count = 0, Uid *first_uid = nullptr, JointId *first_joint = nullptr);
+    // A batch that adds a vehicle takes the next vehicle id, stored in `vehicle`.
+    uint64_t push(Batch &&batch, uint32_t uid_count = 0, Uid *first_uid = nullptr, JointId *first_joint = nullptr,
+                  VehicleId *vehicle = nullptr);
     // Moves every batch due at `tick` into `out`, in sequence order.
     void take_due(uint64_t tick, std::vector<Batch> &out);
     bool empty() const;
@@ -184,6 +188,7 @@ private:
     uint64_t seq_ = 0;
     Uid next_uid_ = 1;
     JointId next_joint_ = 1;
+    VehicleId next_vehicle_ = 1;
 };
 
 }  // namespace pj

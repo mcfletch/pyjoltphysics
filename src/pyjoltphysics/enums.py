@@ -103,6 +103,8 @@ class EventKind(enum.IntEnum):
     CHARACTER = 3
     #: A joint's record; ``a`` is the joint id.
     JOINT = 4
+    #: A vehicle's record; ``a`` is the vehicle id.
+    VEHICLE = 5
 
 
 class EventPhase(enum.IntEnum):
@@ -125,6 +127,11 @@ class EventPhase(enum.IntEnum):
     UP = 9
     #: A joint broke; ``approach`` is the force (N) and ``impulse`` the torque (N m) it carried.
     BREAK = 10
+    #: A vehicle's heaviest blow of a tick: ``b`` the body struck, ``approach`` the closing
+    #: speed (m/s), ``impulse`` its estimate (N s), ``normal`` from the chassis into ``b``.
+    IMPACT = 11
+    #: An impact at or above the vehicle's ``crash_speed``.
+    CRASH = 12
 
 
 class EndReason(enum.IntEnum):

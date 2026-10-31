@@ -30,6 +30,7 @@
 #include "queries.h"
 #include "shapes.h"
 #include "snapshot.h"
+#include "vehicles.h"
 
 #include <Jolt/Core/JobSystem.h>
 #include <Jolt/Core/TempAllocator.h>
@@ -88,6 +89,7 @@ struct WorldStats {
     size_t queued_bodies = 0;   // submitted in add batches not yet applied
     size_t shapes = 0;          // registered shape ids
     size_t characters = 0;
+    size_t vehicles = 0;
     uint64_t broadphase_optimizations = 0;
     size_t pairs = 0;
     size_t events_held = 0;
@@ -148,7 +150,8 @@ public:
 
     // -- commands: any thread, never waits for the world ---------------------
     // Returns the batch's sequence number; an add also returns its first uid.
-    uint64_t submit(Command &&command, uint64_t at_tick, Uid *first_uid = nullptr, JointId *first_joint = nullptr);
+    uint64_t submit(Command &&command, uint64_t at_tick, Uid *first_uid = nullptr, JointId *first_joint = nullptr,
+                    VehicleId *vehicle = nullptr);
     uint64_t submitted_seq() const { return queue_.last_seq(); }
 
     // -- the thread: callers release the GIL ---------------------------------
@@ -289,6 +292,11 @@ private:
     void apply(SetMotion &set, uint64_t index);
     void apply(SetFlags &set, uint64_t index);
     void apply(RestoreState &restore, uint64_t index);
+    void apply(AddVehicle &add, uint64_t index);
+    void apply(RemoveVehicles &remove, uint64_t index);
+    void apply(VehicleInputs &inputs, uint64_t index);
+    void apply(SetVehicleSurfaces &set, uint64_t index);
+    void apply(SetSurfaceTable &set, uint64_t index);
     // joints.cpp
     void remove_joint(Joint &joint, uint64_t index, uint16_t reason);
     void remove_joints_of(const std::vector<Uid> &uids, uint64_t index);
@@ -322,6 +330,9 @@ private:
     JPH::PhysicsSystem system_;
     // Destroyed before the system, whose bodies its characters reference.
     std::unique_ptr<CharacterSystem> characters_;
+    // Destroyed before the system, which holds its constraints and step listeners.
+    std::unique_ptr<VehicleSystem> vehicles_;
+    std::atomic<size_t> applied_vehicles_{0};
     ShapeLibrary shapes_;
 
     // Rows are dense: the snapshot's arrays have one per live body. Removing a

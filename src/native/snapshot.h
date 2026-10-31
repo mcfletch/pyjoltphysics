@@ -64,12 +64,48 @@ struct SnapshotBuffer {
     std::vector<float> joint_force;   // N carried in the last step
     std::vector<float> joint_torque;  // N m carried in the last step
 
+    // Vehicles, every row written each tick, in ascending id; their wheels in
+    // vehicle order, each vehicle's from veh_first_wheel.
+    uint32_t vehicles = 0;
+    uint32_t wheels = 0;
+    std::vector<uint32_t> veh_id;
+    std::vector<Uid> veh_chassis;
+    std::vector<uint8_t> veh_kind;
+    std::vector<uint32_t> veh_first_wheel;
+    std::vector<uint32_t> veh_wheels;
+    std::vector<float> veh_rpm;
+    std::vector<int8_t> veh_gear;            // -1 reverse, 0 neutral, 1 first
+    std::vector<float> veh_forward_speed;    // m/s along the chassis's forward axis
+    std::vector<float> veh_steer;            // steer angle handed to the wheels, rad, positive left
+    std::vector<float> veh_impact_speed;     // closing speed of the tick's heaviest blow, m/s
+    std::vector<float> veh_impact_impulse;   // its estimated impulse, N s
+    std::vector<Uid> veh_impact_uid;         // the body struck; 0 for none
+    std::vector<float> veh_input;            // (n, 4) throttle, steer, brake, handbrake
+    std::vector<uint32_t> wheel_vehicle;     // row of the wheel's vehicle
+    std::vector<double> wheel_position;      // (w, 3) wheel centre, metres
+    std::vector<float> wheel_orientation;    // (w, 4) wheel model (axle x, up y) to world
+    std::vector<float> wheel_length;         // suspension length, m
+    std::vector<float> wheel_compression;    // suspension max length less its length, m
+    std::vector<float> wheel_steer;          // rad, positive left
+    std::vector<float> wheel_angle;          // rotation about the axle, rad
+    std::vector<float> wheel_spin;           // rad/s, positive rolling forward
+    std::vector<float> wheel_load;           // suspension force, N
+    std::vector<float> wheel_slip;           // (w, 2) longitudinal slip ratio, lateral slip angle (rad)
+    std::vector<uint8_t> wheel_contact;
+    std::vector<Uid> wheel_ground;           // uid under the wheel; 0 for none
+    std::vector<uint16_t> wheel_material;    // material index of the body under the wheel
+    std::vector<int32_t> wheel_triangle;     // mesh triangle number under the wheel; -1 for none
+    std::vector<float> wheel_grip;           // grip the surface gives the wheel
+    std::vector<double> wheel_contact_point; // (w, 3)
+    std::vector<float> wheel_contact_normal; // (w, 3)
+
     bool written = false;
     uint64_t written_stamp = 0;  // the publish that last wrote it
 
     void resize(uint32_t count);
     void resize_characters(uint32_t count);
     void resize_joints(uint32_t count);
+    void resize_vehicles(uint32_t count, uint32_t wheel_count);
 };
 
 // Owned by the world thread.

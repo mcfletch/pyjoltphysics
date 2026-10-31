@@ -194,6 +194,9 @@ void WorldCore::apply(RemoveBodies &remove, uint64_t index) {
     }
     if (ids.empty())
         return;
+    const size_t vehicles_before = vehicles_->size();
+    vehicles_->remove_chassis(uids);
+    applied_vehicles_ -= vehicles_before - vehicles_->size();
     remove_joints_of(uids, index);
     for (size_t i = 0; i < ids.size(); ++i) {
         fields_.drag.erase(ids[i].GetIndex());
@@ -597,6 +600,39 @@ std::string WorldCore::save_state() {
     for (size_t i = 0; i < count; ++i)
         std::memcpy(out.data() + sizeof(count) + i * sizeof(Uid), &rows_[i].uid, sizeof(Uid));
     return out + recorder.GetData();
+}
+
+// -- vehicles ----------------------------------------------------------------------
+
+void WorldCore::apply(AddVehicle &add, uint64_t) {
+    const Row *row = find(add.desc.chassis);
+    if (row == nullptr || !vehicles_->add(add.desc, row->id)) {
+        ++rejected_;
+        return;
+    }
+    ++applied_vehicles_;
+}
+
+void WorldCore::apply(RemoveVehicles &remove, uint64_t) {
+    const size_t before = vehicles_->size();
+    vehicles_->remove(remove.ids);
+    applied_vehicles_ -= before - vehicles_->size();
+}
+
+void WorldCore::apply(VehicleInputs &inputs, uint64_t) {
+    for (size_t i = 0; i < inputs.ids.size(); ++i)
+        if (!vehicles_->input(inputs.ids[i], &inputs.values[4 * i]))
+            ++rejected_;
+}
+
+void WorldCore::apply(SetVehicleSurfaces &set, uint64_t) {
+    for (size_t i = 0; i < set.ids.size(); ++i)
+        if (!vehicles_->surface(set.ids[i], set.wheel[i], set.grip[i], set.rolling[i]))
+            ++rejected_;
+}
+
+void WorldCore::apply(SetSurfaceTable &set, uint64_t) {
+    vehicles_->set_table(std::move(set.grip), std::move(set.rolling));
 }
 
 }  // namespace pj

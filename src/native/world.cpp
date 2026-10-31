@@ -66,11 +66,13 @@ WorldCore::WorldCore(const WorldSettings &settings)
     system_.SetBodyActivationListener(&collector_);
     row_of_index_.assign(settings.max_bodies, kNoRow);
     characters_ = std::make_unique<CharacterSystem>(system_, layers_, settings.threads);
+    vehicles_ = std::make_unique<VehicleSystem>(system_, dt_);
 }
 
 WorldCore::~WorldCore() {
     if (thread_.joinable())
         thread_.detach();
+    vehicles_->remove_all();
     for (Joint &joint : joints_)
         if (joint.constraint != nullptr && joint.state != JointState::Broken)
             system_.RemoveConstraint(joint.constraint);
@@ -90,7 +92,8 @@ WorldCore::~WorldCore() {
 
 // -- commands ------------------------------------------------------------------
 
-uint64_t WorldCore::submit(Command &&command, uint64_t at_tick, Uid *first_uid, JointId *first_joint) {
+uint64_t WorldCore::submit(Command &&command, uint64_t at_tick, Uid *first_uid, JointId *first_joint,
+                          VehicleId *vehicle) {
     check();
     const uint32_t uid_count = uids_wanted(command);
     if (uid_count) {
@@ -104,7 +107,7 @@ uint64_t WorldCore::submit(Command &&command, uint64_t at_tick, Uid *first_uid, 
     Batch batch;
     batch.at_tick = at_tick;
     batch.command = std::move(command);
-    const uint64_t seq = queue_.push(std::move(batch), uid_count, first_uid, first_joint);
+    const uint64_t seq = queue_.push(std::move(batch), uid_count, first_uid, first_joint, vehicle);
     std::lock_guard<std::mutex> guard(control_);
     wake_.notify_all();
     return seq;
@@ -227,7 +230,7 @@ void WorldCore::run_ticks(uint64_t count) {
 }
 
 bool WorldCore::settled() const {
-    return !callbacks_.any_step() && characters_->empty() && tracks_.empty() && driven_.empty() &&
+    return !callbacks_.any_step() && characters_->empty() && vehicles_->empty() && tracks_.empty() && driven_.empty() &&
            fields_.torques.empty() && system_.GetNumActiveBodies(JPH::EBodyType::RigidBody) == 0;
 }
 
@@ -575,6 +578,7 @@ bool WorldCore::tick_once() {
     move_kinematics(index);
     activate_motor_joints();
     characters_->step(dt_, uint32_t(index + 1), *jobs_, tick_events_);
+    vehicles_->before_step(dt_);
     const auto t2b = Clock::now();
     verdict_tick_ = uint32_t(index + 1);
     system_.Update(float(dt_), settings_.collision_steps, temp_.get(), jobs_.get());
@@ -597,6 +601,7 @@ bool WorldCore::tick_once() {
     pairs_.fold(uint32_t(tick), raw_contacts_, raw_activations_, system_.GetBodyInterfaceNoLock(),
                 tick_events_);
     expire_verdicts(uint32_t(tick));
+    vehicles_->after_step(uint32_t(tick), tick_events_);
     ring_.append(tick_events_);
     quiet_ = was_settled && !reported && tick_events_.empty() && settled() ? quiet_ + 1 : 0;
     const auto t4 = Clock::now();
@@ -663,6 +668,7 @@ void WorldCore::publish(uint64_t tick) {
         });
     characters_->write(*buffer);
     write_joints(*buffer);
+    vehicles_->write(*buffer);
     pool_size_ = publisher_.pool_size();
     std::lock_guard<std::mutex> guard(publish_lock_);
     published_ = std::move(buffer);
@@ -818,6 +824,7 @@ WorldStats WorldCore::stats() const {
     out.pool = pool_size_.load();
     out.bodies = applied_bodies_.load();
     out.characters = applied_characters_.load();
+    out.vehicles = applied_vehicles_.load();
     out.queued_bodies =
         size_t(std::max<int64_t>(0, reserved_bodies_.load())) - out.bodies - out.characters;
     out.queries = queries_.load();
