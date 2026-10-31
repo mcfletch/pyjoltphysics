@@ -2,7 +2,7 @@
 
 ``World.drain_events()`` returns every record since the last drain as one
 array of :data:`EVENT_DTYPE`; an ``on_events`` callback receives the records
-of one tick the same way. Each record is 64 bytes:
+of one tick the same way. Each record is 72 bytes:
 
 ========== ========= ===============================================================
 field      type      meaning
@@ -24,6 +24,9 @@ impulse    float32   estimated normal impulse of the collision, N s, in contact 
 material_a uint16    contact begin and persist: the material index of ``a``'s side,
                      a mesh triangle's own where it has one
 material_b uint16    the same for ``b``
+depth      float32   contact begin and persist: how far the two bodies overlap,
+                     metres (the deepest of the pair's contacts reported first)
+reserved   uint32    0
 ========== ========= ===============================================================
 
 Jolt reports contacts to its listeners before its solver runs, so the impulse
@@ -57,6 +60,8 @@ EVENT_DTYPE = np.dtype(
         ('impulse', '<f4'),
         ('material_a', '<u2'),
         ('material_b', '<u2'),
+        ('depth', '<f4'),
+        ('reserved', '<u4'),
     ]
 )
 if EVENT_DTYPE.itemsize != _native.EVENT_SIZE:  # pragma: no cover - a build defect

@@ -26,7 +26,7 @@ class CallbackFailed(RuntimeError):
 class WorldStopped(RuntimeError):
     pass
 
-EVENT_SIZE: int = 64
+EVENT_SIZE: int = 72
 
 class Snapshot:
     """The state of every body after one tick."""

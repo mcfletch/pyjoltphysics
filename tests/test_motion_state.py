@@ -311,3 +311,18 @@ def test_bodies_state_reads_the_bodies_as_they_stand(make_world: MakeWorld) -> N
     assert np.allclose(state.position[0], snap.position[snap.rows[ball]])
     assert np.allclose(state.linear_velocity[0], (5.0, 0.0, 0.0))
     assert bool(state.awake[0])
+
+
+def test_a_box_of_little_rounding_has_sharp_edges(make_world: MakeWorld) -> None:
+    world = make_world(tick_hz=60.0, threads=1)
+    sharp = world.add_shape(Shape.box((2.0, 2.0, 2.0), rounding=0.001))
+    round_ = world.add_shape(Shape.box((2.0, 2.0, 2.0)))
+    world.add_bodies(BodyBatch.of_shape([(0.0, 0.0, 0.0)], sharp, motion=MotionType.STATIC))
+    world.add_bodies(BodyBatch.of_shape([(10.0, 0.0, 0.0)], round_, motion=MotionType.STATIC))
+    world.run_ticks(1)
+    # A speck just inside the corner touches the sharp box and is outside the rounded one.
+    speck = Shape.sphere(0.001)
+    assert len(world.overlap(speck, (0.99, 0.99, 0.99))) == 1
+    assert len(world.overlap(speck, (10.99, 0.99, 0.99))) == 0
+    with pytest.raises(ValueError, match='rounding'):
+        Shape.box((1.0, 1.0, 1.0), rounding=-1.0)

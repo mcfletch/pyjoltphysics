@@ -66,8 +66,10 @@ struct Event {
     float impulse;
     uint16_t material_a;  // contact begin and persist: the material index of each side
     uint16_t material_b;
+    float depth;          // contact begin and persist: how far the two overlap, metres
+    uint32_t reserved;
 };
-static_assert(sizeof(Event) == 64, "the event record is 64 bytes");
+static_assert(sizeof(Event) == 72, "the event record is 72 bytes");
 
 // What one listener call reports, before aggregation.
 struct RawContact {
@@ -82,6 +84,7 @@ struct RawContact {
     float normal[3];  // from body 1 to body 2
     float approach;
     float impulse;
+    float depth;
     uint16_t material1, material2;
 };
 

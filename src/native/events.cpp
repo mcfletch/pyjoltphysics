@@ -48,6 +48,7 @@ void Collector::record(const JPH::Body &body1, const JPH::Body &body2,
     store(raw.normal, manifold.mWorldSpaceNormal);
     const JPH::Vec3 closing = body1.GetPointVelocity(point) - body2.GetPointVelocity(point);
     raw.approach = closing.Dot(manifold.mWorldSpaceNormal);
+    raw.depth = manifold.mPenetrationDepth;
 
     if (type == RawContact::Added && !raw.sensors && (body1.IsDynamic() || body2.IsDynamic())) {
         JPH::CollisionEstimationResult result;
@@ -175,6 +176,7 @@ Event PairTracker::make(const Pair &pair, EventPhase phase, uint32_t tick, const
         }
         event.approach = raw->approach;
         event.impulse = raw->impulse;
+        event.depth = raw->depth;
         event.material_a = pair.flip ? raw->material2 : raw->material1;
         event.material_b = pair.flip ? raw->material1 : raw->material2;
     }

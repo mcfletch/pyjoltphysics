@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import numpy as np
+import pytest
 
 from pyjoltphysics import (
     EVENT_DTYPE,
@@ -23,8 +24,8 @@ def of(events: np.ndarray, kind: EventKind, phase: EventPhase) -> np.ndarray:
     return chosen
 
 
-def test_the_record_is_64_bytes() -> None:
-    assert EVENT_DTYPE.itemsize == 64
+def test_the_record_is_72_bytes() -> None:
+    assert EVENT_DTYPE.itemsize == 72
     assert EVENT_DTYPE.fields is not None
     assert EVENT_DTYPE.fields['point'][0] == np.dtype(('<f8', (3,)))
     assert EVENT_DTYPE.names == (
@@ -40,6 +41,8 @@ def test_the_record_is_64_bytes() -> None:
         'impulse',
         'material_a',
         'material_b',
+        'depth',
+        'reserved',
     )
 
 
@@ -304,3 +307,17 @@ def test_persist_records_carry_no_impulse(make_world: MakeWorld) -> None:
     persists = of(events, EventKind.CONTACT, EventPhase.PERSIST)
     assert len(persists) > 0
     assert (persists['impulse'] == 0.0).all()
+
+
+def test_a_resting_contact_reports_how_far_the_bodies_overlap(make_world: MakeWorld) -> None:
+    world = make_world(tick_hz=120.0, threads=1, allow_sleeping=False)
+    world.add_bodies(floor(10.0, flags=BodyFlag.REPORT))
+    world.add_bodies(BodyBatch.boxes([(0.0, 5.0, 0.0)], size=(1.0, 1.0, 1.0), mass=2.0))
+    world.run_ticks(600)
+    world.drain_events()
+    world.run_ticks(3)
+    events = world.drain_events()
+    persist = events[events['phase'] == EventPhase.PERSIST]
+    # The box rests sunk by the penetration slop, 2 cm by default.
+    assert len(persist) == 3
+    assert persist['depth'] == pytest.approx(0.02, abs=2e-3)

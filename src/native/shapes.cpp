@@ -294,7 +294,10 @@ JPH::RefConst<JPH::Shape> ShapeLibrary::primitive(ShapeKind kind, const ShapePar
     switch (kind) {
     case ShapeKind::Box: {
         const JPH::Vec3 half(float(p[0] / 2), float(p[1] / 2), float(p[2] / 2));
-        shape = new JPH::BoxShape(half, convex_radius(half.ReduceMin()));
+        // The fourth parameter, where above 0, is the rounding asked for.
+        const float rounding = p[3] > 0.0 ? std::min(float(p[3]), 0.5f * half.ReduceMin())
+                                          : convex_radius(half.ReduceMin());
+        shape = new JPH::BoxShape(half, rounding);
         break;
     }
     case ShapeKind::Sphere:

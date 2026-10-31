@@ -236,7 +236,7 @@ bodies made with it keep the shape. `shape_info(id)` returns a `ShapeInfo`:
 
 | Constructor | Builds |
 |---|---|
-| `Shape.box(size)`, `sphere(radius)`, `capsule(radius, height)`, `cylinder(radius, height)` | a primitive, as a shape a compound or `of_shape` can name |
+| `Shape.box(size, rounding=None)`, `sphere(radius)`, `capsule(radius, height)`, `cylinder(radius, height)` | a primitive, as a shape a compound or `of_shape` can name; a box's `rounding` (m) rounds its edges, by default 5 cm or half its smallest half extent |
 | `Shape.convex(points, max_convex_radius=0.05, hull_tolerance=1e-3)` | Jolt's `ConvexHullShape` of (m, 3) points: edges rounded by up to `max_convex_radius` (less for a small hull), points allowed `hull_tolerance` m outside. Fewer than 4 points, or points on a plane, a line or one point, raise `ValueError` |
 | `Shape.mesh(points, triangles, materials=None, ids=None)` | Jolt's `MeshShape` of (m, 3) vertices and (t, 3) indices. Degenerate and repeated triangles are dropped; an index past the vertices raises `ValueError`. Edges between faces meeting at under 5 degrees are inactive (Jolt's active edges). A triangle collides on its front face, from which its vertices run anticlockwise; a wall met from both sides lists each triangle in both windings |
 | `Shape.heightfield(heights, origin, spacing, holes=None, block_size=4, bits_per_sample=8, height_range=None)` | Jolt's `HeightFieldShape`, below |
@@ -343,7 +343,7 @@ asleep is in `changed` on that tick, with its final pose.
 
 ## Events
 
-`EVENT_DTYPE` is a 64-byte record:
+`EVENT_DTYPE` is a 72-byte record:
 
 | Field | Type | Meaning |
 |---|---|---|
@@ -357,6 +357,8 @@ asleep is in `changed` on that tick, with its final pose.
 | `approach` | float32 | closing speed along the normal at the point, m/s, positive when approaching |
 | `impulse` | float32 | estimated normal impulse, N s, in contact begin records; in a character begin, the momentum of a dynamic body striking it (N s); a joint break's torque, N m; 0 in every other record |
 | `material_a`, `material_b` | uint16 | contact begin and persist: the material index of each side, a mesh triangle's own where it has one |
+| `depth` | float32 | contact begin and persist: how far the two bodies overlap, m |
+| `reserved` | uint32 | 0 |
 
 A record's simulation time is `tick / tick_hz`; `event_times(events, tick_hz)`
 computes it. The impulse is Jolt's `EstimateCollisionResponse` for the two

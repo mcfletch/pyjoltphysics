@@ -28,6 +28,7 @@ larger than one shape should hold is several tiles,
 from __future__ import annotations
 
 import dataclasses
+import math
 from collections.abc import Sequence
 from typing import Any
 
@@ -82,10 +83,17 @@ class Shape:
     # -- primitives, for compounds and shared bodies -------------------------
 
     @classmethod
-    def box(cls, size: Vector = (1.0, 1.0, 1.0)) -> Shape:
-        """Return a box of edge lengths ``size`` (x, y, z)."""
+    def box(cls, size: Vector = (1.0, 1.0, 1.0), rounding: float | None = None) -> Shape:
+        """Return a box of edge lengths ``size`` (x, y, z).
+
+        ``rounding`` (m) rounds its edges, at most half its smallest half
+        extent; None rounds them by 5 cm or that half, whichever is smaller.
+        """
         x, y, z = (float(v) for v in size)
-        return cls(ShapeKind.BOX, (x, y, z, 0.0))
+        given = 0.0 if rounding is None else float(rounding)
+        if not (math.isfinite(given) and given >= 0.0):
+            raise ValueError('rounding is finite and not negative, not %r' % (rounding,))
+        return cls(ShapeKind.BOX, (x, y, z, given))
 
     @classmethod
     def sphere(cls, radius: float = 0.5) -> Shape:
