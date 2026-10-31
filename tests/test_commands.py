@@ -388,3 +388,28 @@ def test_impulse_and_force_at_a_point_turn_the_body(make_world: MakeWorld) -> No
         assert np.allclose(state.angular_velocity[row], (0.0, -0.5 / inertia, 0.0), atol=1e-3)
     with pytest.raises(ValueError):
         world.add_impulses([a], [(0.0, 0.0, 1.0)], points=[(0.0, 0.0, 0.0), (1.0, 0.0, 0.0)])
+
+
+@pytest.mark.parametrize('push', ['impulse', 'velocity', 'impulse_at'])
+def test_a_push_on_a_body_about_to_sleep_moves_it(make_world: MakeWorld, push: str) -> None:
+    """A resting body still awake has its sleep timer nearly run; a push starts it again.
+
+    The box is pushed once at each tick of the stretch before it falls asleep,
+    each time in a world of its own.
+    """
+    for wait in range(70, 100, 2):
+        world = make_world(tick_hz=120.0, threads=1)
+        world.add_bodies(floor())
+        rows, _ = world.add_bodies(BodyBatch.boxes([(0.0, 0.4, 0.0)], (0.4, 0.4, 0.4), mass=20.0))
+        uid = int(rows[0])
+        world.run_ticks(wait)
+        if push == 'impulse':
+            world.add_impulses([uid], [(0.0, 0.0, -15.0)])
+        elif push == 'impulse_at':
+            world.add_impulses([uid], [(0.0, 0.0, -15.0)], points=[(0.0, 0.4, 0.4)])
+        else:
+            world.set_velocities([uid], [(0.0, 0.0, -0.75)])
+        world.run_ticks(2)
+        snap = world.latest()
+        assert snap is not None
+        assert float(snap.linear_velocity[snap.rows[uid]][2]) < -0.4, wait

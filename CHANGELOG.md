@@ -51,6 +51,7 @@
 - `add_forces` and `add_impulses` take world `points` to act at.
 - `stats()['ragdolls']`, `stats()['soft_bodies']`; `pyjoltphysics.testing.ragdoll_digest` and `soft_digest`.
 - `stats()`: `ragdolls_ms` and `soft_bodies_ms`, the world thread's time a tick on ragdolls and on soft bodies.
+- A push (`add_impulses`, `add_forces`, `add_torques`) on a body still awake starts its sleep timer again, so a body pushed near the end of its rest moves.
 
 - `jolt_version()`, `build_options()` and `selftest()` over the compiled module `pyjoltphysics._native`.
 - Jolt Physics v5.6.0 (commit e77f1755), double precision, cross-platform deterministic, SSE4.2 floor on x86-64.

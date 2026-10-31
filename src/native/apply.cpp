@@ -285,6 +285,11 @@ void WorldCore::apply(AddPushes &push, uint64_t) {
             bodies.AddTorque(row->id, value);
             break;
         }
+        // A body already awake keeps the time it has rested; one pushed near the end of
+        // it would fall asleep in the step and lose the push. The push starts it again.
+        JPH::BodyLockWrite lock(system_.GetBodyLockInterfaceNoLock(), row->id);
+        if (lock.Succeeded())
+            lock.GetBody().ResetSleepTimer();
     }
 }
 
