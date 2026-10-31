@@ -497,11 +497,14 @@ class VehicleSettings:
         - ``rolling_resistance``, ``drag`` and ``downforce`` carry over.
           ``holding`` (N) becomes the brake input ``holding / brake_force``
           below 0.5 m/s.
-        - The tyre curves saturate at full grip: longitudinal friction 1 from
-          a slip ratio of 0.05, lateral friction 1 from a tenth of a degree, flat beyond,
-          scaled by each wheel's grip; the ground body's friction is not
-          used (``body_friction`` False), as the raycast vehicle uses only
-          its ``Surface``.
+        - The tyre curves are friction 1 at every slip ratio and slip angle,
+          scaled by each wheel's grip: the tyre holds the car with no slip
+          up to its friction, as the raycast vehicle's contact cancels the
+          slip up to the friction. A curve rising from 0 at no slip gives a
+          tyre no friction while it is not slipping, and on a road mesh the
+          car then rocks in yaw from tick to tick. The ground body's
+          friction is not used (``body_friction`` False), as the raycast
+          vehicle uses only its ``Surface``.
         """
         count = len(wheels)
         braked = sum(1 for w in wheels if getattr(w, 'braked', True)) or 1
@@ -574,8 +577,8 @@ class VehicleSettings:
             ),
             differential_ratio=1.0,
             differential_limited_slip=math.inf,
-            longitudinal_friction=((0.0, 0.0), (0.05, 1.0), (1.0, 1.0)),
-            lateral_friction=((0.0, 0.0), (0.1, 1.0), (90.0, 1.0)),
+            longitudinal_friction=((0.0, 1.0), (1.0, 1.0)),
+            lateral_friction=((0.0, 1.0), (90.0, 1.0)),
             body_friction=False,
             max_steer=maximum_steer,
             steer_falloff_speed=float(getattr(tuning, 'steer_falloff_speed', 0.0)),

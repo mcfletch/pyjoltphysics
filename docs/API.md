@@ -688,8 +688,8 @@ wheels, mass, gravity=9.81)` maps omi_physics' `VehicleTuning` and
 the mapping field by field: suspension in car weights per metre and fractions
 of critical damping become N/m and N s/m; `engine_force` and `base_speed`
 become a one-gear drivetrain whose torque is flat to `base_speed` and constant
-power above; `brake_force` becomes brake torques; tyre curves saturate at full
-grip from a slip ratio of 0.05 and a slip angle of a tenth of a degree.
+power above; `brake_force` becomes brake torques; the tyres have full
+grip at every slip ratio and slip angle, so a tyre holds without slipping up to its friction.
 
 What a wheel stands on. The casts use the chassis's collision layer, so its
 group, mask and filter decide what it meets; sensors and character proxies are

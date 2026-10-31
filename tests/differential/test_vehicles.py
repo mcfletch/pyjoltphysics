@@ -41,7 +41,7 @@ def test_standing_still_it_settles_at_the_same_ride_height() -> None:
 def test_it_accelerates_to_speed_in_a_straight_line() -> None:
     omi, jolt = _both(V.FLAT, LAUNCH, 8.3)
     for t in (2.3, 4.3, 8.3):
-        assert jolt.speed()[jolt.at(t) - 1] == pytest.approx(omi.speed()[omi.at(t) - 1], rel=0.12)
+        assert jolt.speed()[jolt.at(t) - 1] == pytest.approx(omi.speed()[omi.at(t) - 1], rel=0.04)
     # Straight: a road's width is 7 m; both stay within half a metre of the line.
     assert abs(jolt.position[-1, 0]) < 0.5 and abs(jolt.heading()[-1]) < 0.01
 
@@ -116,7 +116,7 @@ def test_on_a_banked_road_it_stands_and_drives() -> None:
     inputs = V.phases((0.3, (0.0, 0.0, 0.0)), (3.0, (1.0, 0.0, 0.0)), (60.0, (0.3, 0.0, 0.0)))
     omi, jolt = _both(V.bank(angle), inputs, 6.0)
     assert jolt.speed()[-1] == pytest.approx(omi.speed()[-1], rel=0.08)
-    # Held on the slope by a tenth of a degree of tyre slip: within omi's 0.5 m of the line.
+    # Held on the slope by the tyres' friction at no slip: within omi's 0.5 m of the line.
     assert abs(jolt.position[-1, 0]) < 0.6 and abs(jolt.heading()[-1]) < 0.01
 
 

@@ -190,6 +190,52 @@ def test_throttle_drives_it_forward_in_first_gear(make_world: MakeWorld) -> None
     assert snap.vehicles.input[0].tolist() == [1.0, 0.0, 0.0, 0.0]
 
 
+def _yaw_rate(world: World, uid: int) -> float:
+    snap = latest(world)
+    return float(snap.angular_velocity[snap.rows[uid]][1])
+
+
+def _crowned(make_world: MakeWorld, angle: float) -> World:
+    """A road mesh falling ``angle`` rad from a crown along x = 0 to either side, as a drained road does.
+
+    Triangles every 2 m along it and 1 m across, so the wheels cross edges as
+    they do on a road swept from a centreline.
+    """
+    world = make_world(threads=1, tick_hz=120.0)
+    across = np.arange(-6.0, 6.5, 1.0)
+    along = np.arange(-1000.0, 20.0, 2.0)
+    xs, zs = np.meshgrid(across, along)
+    ys = -np.abs(xs) * math.tan(angle)
+    points = np.stack([xs, ys, zs], axis=-1).reshape(-1, 3)
+    n = len(across)
+    rows = np.arange(len(along) - 1)[:, None] * n + np.arange(n - 1)[None, :]
+    a, b, c, d = rows, rows + 1, rows + n, rows + n + 1
+    triangles = np.concatenate([np.stack([a, c, b], -1), np.stack([b, c, d], -1)]).reshape(-1, 3)
+    mesh = world.add_shape(Shape.mesh(points, triangles))
+    world.add_bodies(BodyBatch.of_shape([(0.0, 0.0, 0.0)], mesh, motion=MotionType.STATIC))
+    return world
+
+
+def test_driven_straight_it_holds_its_heading_without_chatter(make_world: MakeWorld) -> None:
+    """The tyres hold a car with no slip angle: its yaw rate stays still from tick to tick.
+
+    On a crowned road each side's wheels stand on ground tilted the other way,
+    so each pair pulls outward and the tyres hold that without a slip angle.
+    """
+    world = _crowned(make_world, math.radians(1.5))
+    car = _car(world)
+    _drive(world, car, 1.0)
+    car.set_input(throttle=0.6)
+    rates = []
+    for _ in range(round(4.0 * 120.0)):
+        world.run_ticks(1)
+        rates.append(_yaw_rate(world, car.chassis))
+    late = np.abs(np.asarray(rates[240:]))
+    assert car.forward_speed > 25.0
+    assert late.max() < 0.002, 'yaw rate up to %.4f rad/s' % late.max()
+    assert abs(_heading(world, car.chassis)) < 0.002
+
+
 def test_negative_throttle_reverses(make_world: MakeWorld) -> None:
     world = _world(make_world)
     car = _car(world)
