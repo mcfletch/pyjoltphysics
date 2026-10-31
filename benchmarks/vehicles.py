@@ -27,7 +27,9 @@ from pyjoltphysics import BodyBatch, VehicleSettings, World, WorldSettings
 def heightfield(n: int = 256) -> np.ndarray:
     xs = (np.arange(n) - n / 2).astype(np.float64)
     x, z = np.meshgrid(xs, xs)
-    return (2.0 * np.sin(x * 0.03) * np.cos(z * 0.04) + 0.3 * np.sin(x * 0.11 + z * 0.07)).astype(np.float32)
+    return (2.0 * np.sin(x * 0.03) * np.cos(z * 0.04) + 0.3 * np.sin(x * 0.11 + z * 0.07)).astype(
+        np.float32
+    )
 
 
 def car() -> VehicleSettings:
@@ -73,13 +75,15 @@ def run(vehicles: int, threads: int, ticks: int) -> dict[str, float | int | str]
             angle = 2 * math.pi * i / vehicles
             position = (40.0 * math.cos(angle), 4.0, 40.0 * math.sin(angle))
             uids, _ = world.add_bodies(
-                BodyBatch.boxes([position], size=(1.85, 0.62, 4.2), mass=1180.0, angular_damping=0.4)
+                BodyBatch.boxes(
+                    [position], size=(1.85, 0.62, 4.2), mass=1180.0, angular_damping=0.4
+                )
             )
             cars.append(world.add_vehicle(int(uids[0]), settings))
         world.run_ticks(120)
         rng = np.random.default_rng(3)
         world.reset_stats()
-        for tick in range(0, ticks, 60):
+        for _ in range(0, ticks, 60):
             ids = [c.id for c in cars]
             steer = rng.uniform(-0.6, 0.6, len(ids))
             world.vehicle_inputs(ids, [(0.6, float(s), 0.0, 0.0) for s in steer])
