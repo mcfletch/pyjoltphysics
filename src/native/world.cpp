@@ -491,11 +491,15 @@ void WorldCore::flush() {
     }
     characters_->flush_events(tick_events_);
     if (!due.empty()) {
-        std::lock_guard<std::mutex> guard(applied_lock_);
-        for (const Batch &batch : due) {
-            applied_log_.push_back(batch.seq);
-            applied_log_.push_back(index);
+        {
+            std::lock_guard<std::mutex> guard(applied_lock_);
+            for (const Batch &batch : due) {
+                applied_log_.push_back(batch.seq);
+                applied_log_.push_back(index);
+            }
         }
+        // The snapshot of the tick it applied at, with what the batches changed.
+        publish(index);
     }
 }
 

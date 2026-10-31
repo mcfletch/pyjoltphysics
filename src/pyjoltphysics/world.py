@@ -997,10 +997,11 @@ class World:
         """Apply the batches due at the current tick now, on the calling thread, without stepping.
 
         Queries then meet the bodies those batches add and miss the ones they
-        remove. The world lock is taken exclusively for the apply, so a
-        free-running world thread waits for it between its own phases; on the
-        world thread, inside a callback, it does nothing. The next snapshot
-        published shows the changes.
+        remove, and a snapshot of the current tick is published with what
+        they changed (its ``applied_seq`` includes them). The world lock is
+        taken exclusively for the apply, so a free-running world thread waits
+        for it between its own phases; on the world thread, inside a callback,
+        it does nothing.
         """
         self._native.flush()
 

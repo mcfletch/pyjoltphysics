@@ -39,7 +39,7 @@ The thread either free-runs or runs in lockstep:
 | `start()` | free-run at `tick_hz`, starting the thread if it is not running |
 | `run_ticks(n)` | run exactly `n` ticks, unpaced, and return when they are done; the world stays in lockstep until the next `start()` |
 | `stop()` | stop and join the thread; idempotent; from a callback, the thread ends after the current tick |
-| `flush()` | apply the batches due at the current tick on the calling thread, under the world lock, without stepping; queries then meet what they add; nothing from a callback |
+| `flush()` | apply the batches due at the current tick on the calling thread, under the world lock, without stepping, and publish a snapshot of the current tick with what they changed; queries then meet what they add; nothing from a callback |
 | `with World(...) as world:` | `stop()` at the end of the block |
 
 A free-running world with no pending batch, no awake body, no step callback

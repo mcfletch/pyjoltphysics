@@ -255,3 +255,16 @@ def test_a_ray_reports_the_mesh_triangle_it_meets(make_world: MakeWorld) -> None
     hit = world.raycast((0.0, 1.0, 9.0), (0.0, -1.0, 0.0))
     assert hit is not None and world.triangle_of(hit.uid, hit.sub_shape) == -1
     assert world.triangle_of(9999, 0) == -1
+
+
+def test_flush_publishes_what_it_applied(make_world: MakeWorld) -> None:
+    world = make_world(tick_hz=60.0, threads=1, gravity=(0.0, 0.0, 0.0))
+    world.run_ticks(1)
+    (ball,), seq = world.add_bodies(BodyBatch.spheres([(1.0, 2.0, 3.0)], radius=0.5,
+                                                      linear_velocity=(3.0, 0.0, 0.0)))
+    world.flush()
+    snap = latest(world)
+    assert snap.includes(seq) and snap.tick == 1
+    row = snap.rows[ball]
+    assert np.allclose(snap.position[row], (1.0, 2.0, 3.0))
+    assert snap.linear_velocity[row][0] == pytest.approx(3.0)
