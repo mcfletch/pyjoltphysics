@@ -167,7 +167,13 @@ def test_limp_ragdoll_comes_to_rest_within_its_limits(make_world: MakeWorld) -> 
         swing = _qmul(offset, _conj(twist))
         twist_angle = 2 * math.atan2(float(np.dot(twist[:3], axis)), float(twist[3]))
         assert bone.twist[0] - 0.05 <= twist_angle <= bone.twist[1] + 0.05, bone.name
-        assert _angle(swing) <= 2 * max(bone.swing) + 0.05, bone.name
+        assert _angle(swing) <= abs(bone.bend) + max(bone.swing) + 0.05, bone.name
+        # Knees bend only backwards and elbows only forwards: a turn about +x of their sign.
+        about_x = 2.0 * math.atan2(float(swing[0]), float(swing[3]))
+        if bone.name.startswith('shin'):
+            assert about_x > -0.05, bone.name
+        if bone.name.startswith('lower_arm'):
+            assert about_x < 0.05, bone.name
 
 
 def test_kinematic_ragdoll_reproduces_the_animated_pose(make_world: MakeWorld) -> None:
@@ -446,3 +452,42 @@ def test_still_ragdolls_sleep_and_wake_for_a_new_pose(make_world: MakeWorld) -> 
         local = _local_rotations(settings, orientation)
         head = settings.bone_index('head')
         assert _angle(_qmul(_conj(rotations[head]), local[head])) < 0.05
+
+
+def test_bend_swings_a_joint_one_way(make_world: MakeWorld) -> None:
+    world = make_world(tick_hz=HZ, threads=1, gravity=(0.0, 0.0, 0.0))
+    world.add_bodies(floor())
+    settings = RagdollSettings(
+        bones=[
+            Bone('base', -1, (0.0, 0.1, 0.0), shape=Shape.box((1.0, 0.2, 1.0)), mass=200.0),
+            Bone(
+                'arm',
+                0,
+                (0.0, 0.1, 0.0),
+                shape=Shape.capsule(0.05, 0.5),
+                shape_offset=(0.0, 0.3, 0.0),
+                mass=1.0,
+                twist_axis=(0.0, 1.0, 0.0),
+                plane_axis=(0.0, 0.0, 1.0),
+                twist=(-0.1, 0.1),
+                swing=(0.6, 0.05),
+                bend=0.6,
+                friction=0.0,
+            ),
+        ],
+        angular_damping=0.0,
+    )
+    doll = world.add_ragdoll(settings)
+    angles = []
+    for push in (3.0, -3.0, 3.0):
+        doll.hit(1, (push, 0.0, 0.0), point=None)
+        for _ in range(int(0.6 * HZ)):
+            world.run_ticks(1)
+            _, orientation = doll.pose()
+            local = _qmul(
+                _conj(orientation[0].astype(np.float64)), orientation[1].astype(np.float64)
+            )
+            # A turn about the plane axis, +z, tips the arm towards -x.
+            angles.append(2.0 * math.atan2(float(local[2]), float(local[3])))
+    assert min(angles) > -0.05
+    assert max(angles) == pytest.approx(1.2, abs=0.05)

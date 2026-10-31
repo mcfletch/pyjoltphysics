@@ -132,8 +132,13 @@ Ragdoll *RagdollSystem::add(const RagdollDesc &desc, JPH::ObjectLayer layer, con
         const JPH::Vec3 twist = (rotation[i] * vec3(&desc.bones[i * kBoneParamCount + kBoneTwistX])).Normalized();
         JPH::Vec3 plane = rotation[i] * vec3(&desc.bones[i * kBoneParamCount + kBonePlaneX]);
         plane = (plane - twist * twist.Dot(plane)).NormalizedOr(twist.GetNormalizedPerpendicular());
-        joint->mTwistAxis1 = joint->mTwistAxis2 = twist;
-        joint->mPlaneAxis1 = joint->mPlaneAxis2 = plane;
+        // The parent's frame is the child's turned by the bend about the plane
+        // axis, which centres the swing cone that far from the rest pose.
+        const JPH::Quat bend = JPH::Quat::sRotation(plane, float(desc.bone(i, kBoneBend)));
+        joint->mTwistAxis1 = bend * twist;
+        joint->mPlaneAxis1 = bend * plane;
+        joint->mTwistAxis2 = twist;
+        joint->mPlaneAxis2 = plane;
         joint->mTwistMinAngle = float(desc.bone(i, kBoneTwistMin));
         joint->mTwistMaxAngle = float(desc.bone(i, kBoneTwistMax));
         joint->mNormalHalfConeAngle = float(desc.bone(i, kBoneNormalCone));

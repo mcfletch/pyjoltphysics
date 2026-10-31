@@ -751,7 +751,7 @@ reason `REMOVED`. `stats()['ragdolls']` counts the ragdolls in the world.
 
 `RagdollSettings` holds the bones parents first, as `Bone(name, parent,
 translation, rotation, shape, shape_offset, shape_rotation, mass, twist_axis,
-plane_axis, twist, swing, strength, friction)`:
+plane_axis, twist, swing, bend, strength, friction)`:
 
 | Field | Meaning |
 |---|---|
@@ -760,7 +760,7 @@ plane_axis, twist, swing, strength, friction)`:
 | `shape`, `shape_offset`, `shape_rotation` | a `Shape` that can be dynamic, placed in the joint's frame |
 | `mass` | kg |
 | `twist_axis`, `plane_axis` | joint frame; None: towards the first child joint (or along the bone's own translation), and a direction square to it |
-| `twist`, `swing` | (min, max) twist about the twist axis; (normal, plane) half angles of the swing cone, rad |
+| `twist`, `swing`, `bend` | (min, max) twist about the twist axis; the swing cone's half angles for turns about the plane axis (tipping the bone towards the normal axis, twist cross plane) and about the normal axis; the bend turns the cone's centre about the plane axis away from the rest pose, so a knee bends 1.3 rad one way and not the other; rad |
 | `strength` | N m, the motors' torque limit when powered |
 | `friction` | N m holding the joint in every mode |
 

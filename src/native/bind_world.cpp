@@ -1085,6 +1085,8 @@ std::tuple<uint32_t, uint32_t, uint64_t> add_ragdoll(World &world, const Doubles
             throw std::invalid_argument("a bone's mass is positive" + row);
         if (!(d.bone(i, kBoneTwistMin) <= d.bone(i, kBoneTwistMax)))
             throw std::invalid_argument("a bone's twist limits are min <= max" + row);
+        if (std::abs(d.bone(i, kBoneBend)) > 3.0)
+            throw std::invalid_argument("a bone's bend is within 3 rad" + row);
         for (BoneParam k : {kBoneNormalCone, kBonePlaneCone, kBoneStrength, kBoneFriction})
             if (d.bone(i, k) < 0.0)
                 throw std::invalid_argument("a bone's cone angles, strength and friction are not negative" + row);

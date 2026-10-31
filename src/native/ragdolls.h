@@ -63,7 +63,9 @@ enum BoneParam : uint32_t {
     kBoneTwistX, kBoneTwistY, kBoneTwistZ,  // twist axis, joint frame
     kBonePlaneX, kBonePlaneY, kBonePlaneZ,  // plane axis, joint frame, square to the twist axis
     kBoneTwistMin, kBoneTwistMax,       // rad
-    kBoneNormalCone, kBonePlaneCone,    // half angles, rad
+    kBoneNormalCone,                    // half angle of turns about the plane axis, rad
+    kBonePlaneCone,                     // half angle of turns about the normal axis, rad
+    kBoneBend,                          // rad the swing cone's centre is turned about the plane axis
     kBoneStrength,                      // N m: the motors' torque limit when powered
     kBoneFriction,                      // N m: joint friction
     kBoneParamCount,

@@ -76,8 +76,15 @@ class Bone:
     """One bone: a joint of the skeleton and the body that moves with it.
 
     ``parent`` is the index of the parent bone, -1 for the root. ``mass`` is
-    kg. ``twist`` is the (min, max) twist about ``twist_axis`` and ``swing``
-    the (normal, plane) half angles of the swing cone, radians. A
+    kg. ``twist`` is the (min, max) twist about ``twist_axis``, radians.
+    ``swing`` is the swing cone's half angles: the first bounds turns about
+    ``plane_axis``, which tip the bone towards the normal axis
+    (``twist_axis`` cross ``plane_axis``); the second bounds turns about the
+    normal axis, which tip it towards ``plane_axis``. ``bend`` (rad) turns
+    the cone's centre about ``plane_axis`` away from the rest pose, so the
+    joint swings further one way than the other: a knee with a plane axis
+    along the hips, a first half angle of 0.65 and a bend of 0.65 swings from
+    straight to 1.3 rad backwards and not forwards. A
     ``twist_axis`` of None is the direction to the first child joint, or the
     bone's own translation for a bone without children; a ``plane_axis`` of
     None is a direction square to it. ``strength`` (N m) is the motors'
@@ -97,6 +104,7 @@ class Bone:
     plane_axis: Vector | None = None
     twist: tuple[float, float] = (-0.3, 0.3)
     swing: tuple[float, float] = (0.6, 0.6)
+    bend: float = 0.0
     strength: float = 300.0
     friction: float = 0.5
 
@@ -269,7 +277,8 @@ class RagdollSettings:
 
         Pelvis (the root, at 0.55 of the height), chest, head, upper and lower
         arms hanging at the sides, thighs and shins. Joint limits suit each:
-        knees and elbows bend one way, the neck and shoulders move most.
+        knees bend back and elbows forward, to 1.3 and 1.4 rad, hips swing
+        forward further than back, the neck and shoulders move most.
         ``settings`` are further :class:`RagdollSettings` fields.
         """
         s = height / 1.8
@@ -301,26 +310,27 @@ class RagdollSettings:
             np.array([0.12, 0.13, 0.10, 0.05, 0.045, 0.05, 0.045, 0.07, 0.055, 0.07, 0.055]) * s
         )
         out = cls.from_skeleton(names, parents, translations, radius=radius, mass=mass, **settings)
-        limits = {
-            'chest': ((-0.3, 0.3), (0.4, 0.3)),
-            'head': ((-0.8, 0.8), (0.6, 0.5)),
-            'upper_arm_l': ((-0.6, 0.6), (1.4, 1.2)),
-            'upper_arm_r': ((-0.6, 0.6), (1.4, 1.2)),
-            'lower_arm_l': ((-0.6, 0.6), (1.2, 0.05)),
-            'lower_arm_r': ((-0.6, 0.6), (1.2, 0.05)),
-            'thigh_l': ((-0.4, 0.4), (1.0, 0.5)),
-            'thigh_r': ((-0.4, 0.4), (1.0, 0.5)),
-            'shin_l': ((-0.1, 0.1), (1.2, 0.05)),
-            'shin_r': ((-0.1, 0.1), (1.2, 0.05)),
+        # (twist, swing, bend, plane axis). The limbs hang along -y; a plane
+        # axis of +x (across the hips) makes the first half angle and the bend
+        # bound bending forward and back, a positive bend turning backwards.
+        side = (1.0, 0.0, 0.0)
+        limits: dict[str, tuple[tuple[float, float], tuple[float, float], float, Vector | None]] = {
+            'chest': ((-0.3, 0.3), (0.4, 0.3), 0.0, None),
+            'head': ((-0.8, 0.8), (0.6, 0.5), 0.0, None),
+            'upper_arm_l': ((-0.6, 0.6), (1.4, 1.2), 0.0, None),
+            'upper_arm_r': ((-0.6, 0.6), (1.4, 1.2), 0.0, None),
+            'lower_arm_l': ((-0.6, 0.6), (0.7, 0.05), -0.7, side),
+            'lower_arm_r': ((-0.6, 0.6), (0.7, 0.05), -0.7, side),
+            'thigh_l': ((-0.4, 0.4), (1.0, 0.5), -0.5, side),
+            'thigh_r': ((-0.4, 0.4), (1.0, 0.5), -0.5, side),
+            'shin_l': ((-0.1, 0.1), (0.65, 0.05), 0.65, side),
+            'shin_r': ((-0.1, 0.1), (0.65, 0.05), 0.65, side),
         }
         strength = {'chest': 600.0, 'head': 150.0, 'thigh_l': 600.0, 'thigh_r': 600.0}
         for bone in out.bones:
             if bone.name in limits:
-                bone.twist, bone.swing = limits[bone.name]
+                bone.twist, bone.swing, bone.bend, bone.plane_axis = limits[bone.name]
             bone.strength = strength.get(bone.name, 250.0) * mass / 70.0
-            # Elbows and knees swing towards the front (+z), square to the bone.
-            if bone.name.startswith(('lower_arm', 'shin')):
-                bone.plane_axis = (1.0, 0.0, 0.0)
         return out
 
     # -- files and the native module ------------------------------------------
@@ -434,6 +444,7 @@ class RagdollSettings:
                     bone.twist[1],
                     bone.swing[0],
                     bone.swing[1],
+                    bone.bend,
                     bone.strength,
                     bone.friction,
                 ]

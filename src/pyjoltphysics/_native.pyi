@@ -389,7 +389,7 @@ class World:
 
     def set_joints_enabled(self, ids: Annotated[NDArray[numpy.uint32], dict(shape=(None,), order='C', device='cpu', writable=False)], enabled: Annotated[NDArray[numpy.uint8], dict(shape=(None,), order='C', device='cpu', writable=False)], at_tick: int = 0) -> int: ...
 
-    def add_ragdoll(self, params: Annotated[NDArray[numpy.float64], dict(shape=(None,), order='C', device='cpu', writable=False)], bones: Annotated[NDArray[numpy.float64], dict(shape=(None, 28), order='C', device='cpu', writable=False)], shape_id: Annotated[NDArray[numpy.uint32], dict(shape=(None,), order='C', device='cpu', writable=False)], at_tick: int = 0) -> tuple[int, int, int]:
+    def add_ragdoll(self, params: Annotated[NDArray[numpy.float64], dict(shape=(None,), order='C', device='cpu', writable=False)], bones: Annotated[NDArray[numpy.float64], dict(shape=(None, 29), order='C', device='cpu', writable=False)], shape_id: Annotated[NDArray[numpy.uint32], dict(shape=(None,), order='C', device='cpu', writable=False)], at_tick: int = 0) -> tuple[int, int, int]:
         """
         Queue a ragdoll; return its id, its first bone's uid and the batch's sequence number.
         """
