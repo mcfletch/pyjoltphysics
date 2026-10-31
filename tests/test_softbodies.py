@@ -8,6 +8,7 @@ import pytest
 
 from pyjoltphysics import (
     BodyBatch,
+    LongRange,
     MotionType,
     Snapshot,
     SoftBody,
@@ -271,3 +272,45 @@ def test_settings_round_trip_as_dicts() -> None:
     again = SoftBodySettings.from_dict(cloth.as_dict())
     assert np.array_equal(again.positions, cloth.positions)
     assert again.bend_compliance == cloth.bend_compliance
+
+
+def test_massless_vertices_stay_where_they_are_placed(make_world: MakeWorld) -> None:
+    world = make_world(tick_hz=HZ, threads=1)
+    cloth = SoftBodySettings.cloth(1.0, 1.0, columns=6, rows=6, mass=0.4)
+    masses = cloth.vertex_masses().copy()
+    masses[:6] = 0.0  # the -z edge
+    held = SoftBodySettings.cloth(1.0, 1.0, columns=6, rows=6, masses=masses, linear_damping=2.0)
+    body = world.add_soft_body(held, position=(0.0, 2.0, 0.0))
+    world.run_ticks(int(3 * HZ))
+    vertices = _vertices(latest(world), body)
+    assert np.abs(vertices[:6] - (held.positions[:6] + (0.0, 2.0, 0.0))).max() < 1e-5
+    assert vertices[6:, 1].min() < 1.3
+
+
+def test_long_range_attachments_limit_the_stretch(make_world: MakeWorld) -> None:
+    world = make_world(tick_hz=HZ, threads=1)
+    reach = {}
+    for x, long_range in ((0.0, LongRange.NONE), (3.0, LongRange.GEODESIC)):
+        cloth = SoftBodySettings.cloth(
+            1.0,
+            1.0,
+            columns=11,
+            rows=11,
+            mass=2.0,
+            compliance=1e-2,
+            linear_damping=2.0,
+            long_range=long_range,
+        )
+        a, b, c, _ = cloth.corner_indices()
+        pins = cloth.positions[[a, b]] + (x, 2.0, 0.0)
+        body = world.add_soft_body(cloth, position=(x, 2.0, 0.0), pins=([a, b], pins))
+        reach[long_range] = (body, c, pins[0])
+    world.run_ticks(int(4 * HZ))
+    snap = latest(world)
+    stretched = {
+        mode: float(np.linalg.norm(_vertices(snap, body)[c] - pin))
+        for mode, (body, c, pin) in reach.items()
+    }
+    # Soft edges let the free corner sag past the cloth's depth; the attachments hold it near 1 m.
+    assert stretched[LongRange.NONE] > 1.05
+    assert stretched[LongRange.GEODESIC] < 1.005
