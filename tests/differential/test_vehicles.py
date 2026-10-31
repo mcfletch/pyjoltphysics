@@ -6,56 +6,73 @@ suspension, a slip-curve tyre and an engine, clutch and differential as
 constraints. The comparisons are of behaviour glisteel's handling and feel
 tests rely on, with the tolerances in openglcontext/plans/NATIVE-PHYSICS.md
 (P6a as built).
+
+Each scenario reduces a drive to a few numbers (its summary). omi_physics'
+summary is its recorded answer (:func:`differential.vehicles.reference`),
+checked against a live run where omi_physics is installed; Jolt's is computed.
 """
 
 from __future__ import annotations
 
 import math
-from typing import Any
 
 import numpy as np
 import pytest
 
+from differential import engines
 from differential import vehicles as V
+from pyjoltphysics import VehicleSettings
 
 pytestmark = pytest.mark.differential
 
 LAUNCH = V.phases((0.3, (0.0, 0.0, 0.0)), (60.0, (1.0, 0.0, 0.0)))
 
 
-def _both(
-    ground: V.Ground, inputs: V.Inputs, seconds: float, **kwargs: Any
-) -> tuple[V.Drive, V.Drive]:
-    return V.run_omi(ground, inputs, seconds, **kwargs), V.run_jolt(
-        ground, inputs, seconds, **kwargs
-    )
+def _settled(drive: V.Drive) -> list[float]:
+    """Ride height, speed and wheels on the ground at the end."""
+    return [float(drive.position[-1, 1]), float(drive.speed()[-1]), int(drive.grounded[-1])]
 
 
 def test_standing_still_it_settles_at_the_same_ride_height() -> None:
-    omi, jolt = _both(V.FLAT, V.constant(), 2.0)
-    assert jolt.position[-1, 1] == pytest.approx(omi.position[-1, 1], abs=1e-3)
-    assert jolt.speed()[-1] < 0.01 and omi.speed()[-1] < 0.01
-    assert jolt.grounded[-1] == omi.grounded[-1] == 4
+    omi = V.reference('settle', _settled, V.FLAT, V.constant(), 2.0)
+    jolt = _settled(V.run_jolt(V.FLAT, V.constant(), 2.0))
+    assert jolt[0] == pytest.approx(omi[0], abs=1e-3)
+    assert jolt[1] < 0.01 and omi[1] < 0.01
+    assert jolt[2] == omi[2] == 4
+
+
+def _launch_speeds(drive: V.Drive) -> list[float]:
+    """Speed at 2.3, 4.3 and 8.3 s."""
+    return [float(drive.speed()[drive.at(t) - 1]) for t in (2.3, 4.3, 8.3)]
 
 
 def test_it_accelerates_to_speed_in_a_straight_line() -> None:
-    omi, jolt = _both(V.FLAT, LAUNCH, 8.3)
-    for t in (2.3, 4.3, 8.3):
-        assert jolt.speed()[jolt.at(t) - 1] == pytest.approx(omi.speed()[omi.at(t) - 1], rel=0.04)
-    # Straight: a road's width is 7 m; both stay within half a metre of the line.
-    assert abs(jolt.position[-1, 0]) < 0.5 and abs(jolt.heading()[-1]) < 0.01
+    omi = V.reference('launch', _launch_speeds, V.FLAT, LAUNCH, 8.3)
+    drive = V.run_jolt(V.FLAT, LAUNCH, 8.3)
+    assert _launch_speeds(drive) == pytest.approx(omi, rel=0.04)
+    # Straight: a road's width is 7 m; it stays within half a metre of the line.
+    assert abs(drive.position[-1, 0]) < 0.5 and abs(drive.heading()[-1]) < 0.01
+
+
+BRAKE = V.phases((0.3, (0.0, 0.0, 0.0)), (3.3, (1.0, 0.0, 0.0)), (60.0, (0.0, 0.0, 1.0)))
+
+
+def _braking(drive: V.Drive) -> list[float]:
+    """Stopping distance over the square of the speed at the brake, and the speed at the end."""
+    i = drive.at(3.3)
+    v0 = drive.speed()[i]
+    stop = i + int(np.argmax(drive.speed()[i:] < 0.2))
+    return [
+        float(abs(drive.position[stop, 2] - drive.position[i, 2]) / v0**2),
+        float(drive.speed()[-1]),
+    ]
 
 
 def test_it_brakes_to_a_stop_over_the_same_distance_per_speed() -> None:
-    inputs = V.phases((0.3, (0.0, 0.0, 0.0)), (3.3, (1.0, 0.0, 0.0)), (60.0, (0.0, 0.0, 1.0)))
-    found = []
-    for drive in _both(V.FLAT, inputs, 8.0):
-        i = drive.at(3.3)
-        v0 = drive.speed()[i]
-        stop = i + int(np.argmax(drive.speed()[i:] < 0.2))
-        found.append(abs(drive.position[stop, 2] - drive.position[i, 2]) / v0**2)
-        assert drive.speed()[-1] < 0.05
-    assert found[1] == pytest.approx(found[0], rel=0.08)
+    omi = V.reference('brake', _braking, V.FLAT, BRAKE, 8.0)
+    jolt = _braking(V.run_jolt(V.FLAT, BRAKE, 8.0))
+    assert omi[1] < 0.05 and jolt[1] < 0.05
+    assert jolt[0] == pytest.approx(omi[0], rel=0.08)
 
 
 @pytest.mark.parametrize(('accelerate', 'steer'), [(1.0, 0.5), (2.0, 0.3), (2.0, 1.0)])
@@ -63,13 +80,23 @@ def test_steady_cornering_pulls_the_same_lateral_g(accelerate: float, steer: flo
     inputs = V.phases(
         (0.3, (0.0, 0.0, 0.0)), (0.3 + accelerate, (1.0, 0.0, 0.0)), (60.0, (0.0, steer, 0.0))
     )
-    found = []
-    for drive in _both(V.FLAT, inputs, accelerate + 3.3):
+
+    def cornering(drive: V.Drive) -> list[float]:
+        """Yaw rate and lateral g over the turn, and the lowest the up axis tilted."""
         i, j = drive.at(accelerate + 1.8), len(drive.time) - 1
         yaw = (drive.heading()[j] - drive.heading()[i]) / (drive.time[j] - drive.time[i])
-        found.append((yaw, drive.speed()[i:].mean() * yaw / 9.81))
-        assert drive.up[:, 1].min() > 0.99
-    (omi_yaw, omi_g), (jolt_yaw, jolt_g) = found
+        return [
+            float(yaw),
+            float(drive.speed()[i:].mean() * yaw / 9.81),
+            float(drive.up[:, 1].min()),
+        ]
+
+    seconds = accelerate + 3.3
+    omi_yaw, omi_g, omi_up = V.reference(
+        'corner/%g/%g' % (accelerate, steer), cornering, V.FLAT, inputs, seconds
+    )
+    jolt_yaw, jolt_g, jolt_up = cornering(V.run_jolt(V.FLAT, inputs, seconds))
+    assert omi_up > 0.99 and jolt_up > 0.99
     assert jolt_g == pytest.approx(omi_g, rel=0.06)
     assert jolt_yaw == pytest.approx(omi_yaw, rel=0.10)
 
@@ -88,43 +115,111 @@ def _flight(drive: V.Drive) -> tuple[int, int]:
     return best
 
 
+def _jump(drive: V.Drive) -> list[float]:
+    """Highest point, time in the air and where it lands (z)."""
+    take_off, landing = _flight(drive)
+    return [
+        float(drive.position[:, 1].max()),
+        float(drive.time[landing] - drive.time[take_off]),
+        float(drive.position[landing, 2]),
+    ]
+
+
 def test_a_jump_flies_as_far_and_lands_upright() -> None:
     inputs = V.phases((0.3, (0.0, 0.0, 0.0)), (2.0, (1.0, 0.0, 0.0)), (60.0, (0.2, 0.0, 0.0)))
-    omi, jolt = _both(V.ramp(20.0), inputs, 5.0)
-    (o0, o1), (j0, j1) = _flight(omi), _flight(jolt)
-    assert jolt.position[:, 1].max() == pytest.approx(omi.position[:, 1].max(), abs=0.15)
-    assert jolt.time[j1] - jolt.time[j0] == pytest.approx(omi.time[o1] - omi.time[o0], rel=0.12)
-    assert jolt.position[j1, 2] == pytest.approx(omi.position[o1, 2], rel=0.08)
-    assert jolt.up[:, 1].min() > 0.9 and jolt.up[-1, 1] > 0.999
-    assert jolt.grounded[-1] == 4
+    omi = V.reference('jump', _jump, V.ramp(20.0), inputs, 5.0)
+    drive = V.run_jolt(V.ramp(20.0), inputs, 5.0)
+    jolt = _jump(drive)
+    assert jolt[0] == pytest.approx(omi[0], abs=0.15)
+    assert jolt[1] == pytest.approx(omi[1], rel=0.12)
+    assert jolt[2] == pytest.approx(omi[2], rel=0.08)
+    assert drive.up[:, 1].min() > 0.9 and drive.up[-1, 1] > 0.999
+    assert drive.grounded[-1] == 4
+
+
+def _wall(drive: V.Drive) -> list[float]:
+    """The hardest blow, the speed two ticks before it, and the speed and up axis at the end."""
+    k = int(np.argmax(drive.impact))
+    return [
+        float(drive.impact[k]),
+        float(drive.speed()[k - 2]),
+        float(drive.speed()[-1]),
+        float(drive.up[-1, 1]),
+    ]
 
 
 def test_a_wall_stops_it_with_the_blow_of_its_closing_speed() -> None:
-    omi, jolt = _both(V.wall(40.0), LAUNCH, 4.0)
-    for drive in (omi, jolt):
-        k = int(np.argmax(drive.impact))
-        assert drive.impact[k] == pytest.approx(drive.speed()[k - 2], rel=0.05)
-        assert drive.speed()[-1] < 1.0 and drive.up[-1, 1] > 0.99
-    assert jolt.impact.max() == pytest.approx(omi.impact.max(), rel=0.08)
+    omi = V.reference('wall', _wall, V.wall(40.0), LAUNCH, 4.0)
+    jolt = _wall(V.run_jolt(V.wall(40.0), LAUNCH, 4.0))
+    for blow, closing, speed, up in (omi, jolt):
+        assert blow == pytest.approx(closing, rel=0.05)
+        assert speed < 1.0 and up > 0.99
+    assert jolt[0] == pytest.approx(omi[0], rel=0.08)
+
+
+def _upright(drive: V.Drive) -> list[float]:
+    """The up axis's height at the end."""
+    return [float(drive.up[-1, 1])]
+
+
+def _final_speed(drive: V.Drive) -> list[float]:
+    """The speed at the end."""
+    return [float(drive.speed()[-1])]
 
 
 def test_on_a_banked_road_it_stands_and_drives() -> None:
-    angle = math.radians(10.0)
-    omi, jolt = _both(V.bank(angle), V.constant(), 3.0)
-    assert np.linalg.norm(jolt.position[-1] - jolt.position[0]) < 0.25
-    assert jolt.up[-1, 1] == pytest.approx(omi.up[-1, 1], abs=1e-3)
+    ground = V.bank(math.radians(10.0))
+    omi = V.reference('bank/stand', _upright, ground, V.constant(), 3.0)
+    drive = V.run_jolt(ground, V.constant(), 3.0)
+    assert np.linalg.norm(drive.position[-1] - drive.position[0]) < 0.25
+    assert _upright(drive)[0] == pytest.approx(omi[0], abs=1e-3)
     inputs = V.phases((0.3, (0.0, 0.0, 0.0)), (3.0, (1.0, 0.0, 0.0)), (60.0, (0.3, 0.0, 0.0)))
-    omi, jolt = _both(V.bank(angle), inputs, 6.0)
-    assert jolt.speed()[-1] == pytest.approx(omi.speed()[-1], rel=0.08)
+    omi = V.reference('bank/drive', _final_speed, ground, inputs, 6.0)
+    drive = V.run_jolt(ground, inputs, 6.0)
+    assert _final_speed(drive)[0] == pytest.approx(omi[0], rel=0.08)
     # Held on the slope by the tyres' friction at no slip: within omi's 0.5 m of the line.
-    assert abs(jolt.position[-1, 0]) < 0.6 and abs(jolt.heading()[-1]) < 0.01
+    assert abs(drive.position[-1, 0]) < 0.6 and abs(drive.heading()[-1]) < 0.01
+
+
+def _ride(drive: V.Drive) -> list[float]:
+    """The chassis's root-mean-square vertical speed after the first second, and the speed at the end."""
+    return [
+        float(np.sqrt((drive.velocity[drive.at(1.0) :, 1] ** 2).mean())),
+        float(drive.speed()[-1]),
+    ]
 
 
 def test_over_bumps_it_rides_like_the_raycast_car() -> None:
     inputs = V.phases((0.3, (0.0, 0.0, 0.0)), (3.0, (1.0, 0.0, 0.0)), (60.0, (0.3, 0.0, 0.0)))
-    omi, jolt = _both(V.bumpy(), inputs, 6.0, start=(0.0, 0.7, 60.0))
-    rms = [float(np.sqrt((d.velocity[d.at(1.0) :, 1] ** 2).mean())) for d in (omi, jolt)]
-    assert rms[1] == pytest.approx(rms[0], rel=0.15)
-    assert jolt.speed()[-1] == pytest.approx(omi.speed()[-1], rel=0.10)
-    assert jolt.up[:, 1].min() > 0.99
-    assert abs(jolt.position[-1, 0]) < 2.0
+    start = (0.0, 0.7, 60.0)
+    omi = V.reference('bumps', _ride, V.bumpy(), inputs, 6.0, start=start)
+    drive = V.run_jolt(V.bumpy(), inputs, 6.0, start=start)
+    jolt = _ride(drive)
+    assert jolt[0] == pytest.approx(omi[0], rel=0.15)
+    assert jolt[1] == pytest.approx(omi[1], rel=0.10)
+    assert drive.up[:, 1].min() > 0.99
+    assert abs(drive.position[-1, 0]) < 2.0
+
+
+def test_the_car_is_the_one_omi_physics_builds_from_glisteel_s_spec() -> None:
+    """The plain tuning and wheels map to the same Jolt car as omi_physics' own records."""
+    if not engines.have_omi():
+        pytest.skip('omi_physics is not installed; the plain records are the reference')
+    from omi_physics import vehicle as omi_vehicle  # noqa: PLC0415 omi_physics is optional
+
+    given = V.settings()
+    omi = VehicleSettings.from_raycast(
+        omi_vehicle.VehicleTuning(**V.TUNING), omi_vehicle.car_wheels(**V.WHEELS), V.MASS
+    )
+    assert _same(given.as_dict(), omi.as_dict())
+
+
+def _same(one: object, two: object) -> bool:
+    """Whether two settings dictionaries hold the same values, numbers within 1e-12."""
+    if isinstance(one, dict) and isinstance(two, dict):
+        return one.keys() == two.keys() and all(_same(one[k], two[k]) for k in one)
+    if isinstance(one, (list, tuple)) and isinstance(two, (list, tuple)):
+        return len(one) == len(two) and all(_same(a, b) for a, b in zip(one, two, strict=True))
+    if isinstance(one, (int, float)) and isinstance(two, (int, float)):
+        return math.isclose(one, two, rel_tol=1e-12, abs_tol=1e-12)
+    return one == two

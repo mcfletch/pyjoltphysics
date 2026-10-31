@@ -1,13 +1,7 @@
 """The differential suite: Jolt against omi_physics, the reference engine.
 
-``test_scenes.py``, ``test_smoke.py``, ``test_characters.py`` and ``test_p3.py``
-compare with omi_physics' recorded answers and run without it; the vehicle
-scenarios (``test_vehicles.py``, ``vehicles.py``) run omi_physics live and are
-not collected without it.
+omi_physics' side of every comparison is its recorded answer
+(``omi_golden.json``, read by :func:`differential.engines.reference`), so the
+suite runs without omi_physics. Where omi_physics is installed each recorded
+answer is also checked against a live run.
 """
-
-from __future__ import annotations
-
-from differential.engines import have_omi
-
-collect_ignore = [] if have_omi() else ['test_vehicles.py', 'vehicles.py']

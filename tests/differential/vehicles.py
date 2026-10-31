@@ -1,4 +1,4 @@
-"""glisteel's car run through omi_physics' RaycastVehicle and through a Jolt vehicle.
+"""glisteel's car run through a Jolt vehicle, and through omi_physics' RaycastVehicle where installed.
 
 The car is glisteel's ``CarSpec``: 1180 kg, a 1.85 x 0.62 x 4.2 m chassis box,
 four 0.33 m wheels on a 2.55 m wheelbase and a 1.70 m track, rear drive, and
@@ -6,20 +6,23 @@ the tuning of an electric supercar. Both engines step at 120 Hz. The Jolt car
 is :meth:`VehicleSettings.from_raycast` of the same tuning, so the suite
 measures that mapping. A scenario is a ground and a schedule of inputs by time;
 :class:`Drive` holds the chassis's state each tick.
+
+omi_physics' side of each comparison is its recorded answer
+(:func:`reference`), checked against :func:`run_omi` where omi_physics is
+installed; the module imports omi_physics only in :func:`run_omi`.
 """
 
 from __future__ import annotations
 
 import dataclasses
 import math
+import types
 from collections.abc import Callable
 from typing import Any
 
 import numpy as np
-from omi_physics import model
-from omi_physics import vehicle as omi_vehicle
-from omi_physics import world as omi
 
+from differential import engines
 from pyjoltphysics import (
     BodyBatch,
     BodyFlag,
@@ -37,39 +40,86 @@ WHEEL_HEIGHT = -0.31 + 0.14 + 0.15
 Inputs = Callable[[float], tuple[float, float, float]]
 
 
-def tuning() -> Any:
-    """glisteel's ``CarSpec.tuning``."""
-    return omi_vehicle.VehicleTuning(
-        engine_force=20000.0,
-        brake_force=16000.0,
-        maximum_steer=0.52,
-        steer_speed=3.2,
-        rolling_resistance=0.02,
-        downforce=6.0,
-        steer_falloff_speed=10.0,
-        base_speed=21.0,
-        drag=0.9,
-    )
+#: glisteel's ``CarSpec.tuning``, the fields omi_physics' ``VehicleTuning`` gives it.
+TUNING: dict[str, float] = {
+    'engine_force': 20000.0,
+    'brake_force': 16000.0,
+    'maximum_steer': 0.52,
+    'steer_speed': 3.2,
+    'rolling_resistance': 0.02,
+    'downforce': 6.0,
+    'steer_falloff_speed': 10.0,
+    'base_speed': 21.0,
+    'drag': 0.9,
+}
+#: ``VehicleTuning``'s defaults for the fields glisteel leaves alone.
+TUNING_DEFAULTS: dict[str, float] = {'reverse_fraction': 0.4, 'holding': 6000.0}
+#: glisteel's ``CarSpec.wheels()``: the arguments of omi_physics' ``car_wheels``.
+WHEELS: dict[str, Any] = {
+    'wheelbase': 2.55,
+    'track': 1.70,
+    'height': WHEEL_HEIGHT,
+    'drive': 'rear',
+    'radius': 0.33,
+    'suspension_travel': 0.22,
+    'suspension_stiffness': 26.0,
+    'suspension_damping': 0.55,
+    'grip': 1.9,
+}
 
 
-def wheels() -> list[Any]:
-    """glisteel's ``CarSpec.wheels()``."""
-    return omi_vehicle.car_wheels(
-        wheelbase=2.55,
-        track=1.70,
-        height=WHEEL_HEIGHT,
-        drive='rear',
-        radius=0.33,
-        suspension_travel=0.22,
-        suspension_stiffness=26.0,
-        suspension_damping=0.55,
-        grip=1.9,
-    )
+def tuning() -> types.SimpleNamespace:
+    """glisteel's tuning, with the attributes ``VehicleTuning`` has."""
+    return types.SimpleNamespace(**TUNING_DEFAULTS, **TUNING)
+
+
+def wheels() -> list[types.SimpleNamespace]:
+    """glisteel's four wheels, front pair steered, rear pair driven, with ``WheelSpec``'s attributes."""
+    found = []
+    for front in (True, False):
+        for side in (-1.0, 1.0):
+            found.append(
+                types.SimpleNamespace(
+                    position=(
+                        side * WHEELS['track'] / 2.0,
+                        WHEELS['height'],
+                        (-1.0 if front else 1.0) * WHEELS['wheelbase'] / 2.0,
+                    ),
+                    radius=WHEELS['radius'],
+                    suspension_travel=WHEELS['suspension_travel'],
+                    suspension_stiffness=WHEELS['suspension_stiffness'],
+                    suspension_damping=WHEELS['suspension_damping'],
+                    steering=front,
+                    driven=not front,
+                    braked=True,
+                    grip=WHEELS['grip'],
+                )
+            )
+    return found
 
 
 def settings(**changes: Any) -> VehicleSettings:
     """The Jolt car: the mapping of glisteel's tuning and wheels."""
     return VehicleSettings.from_raycast(tuning(), wheels(), MASS, **changes)
+
+
+def reference(
+    key: str,
+    summary: Callable[[Drive], list[float]],
+    ground: Ground,
+    inputs: Inputs,
+    seconds: float,
+    **kwargs: Any,
+) -> list[float]:
+    """omi_physics' ``summary`` of a drive, recorded under ``vehicles/key``.
+
+    Checked against :func:`run_omi` of the same scenario where omi_physics is installed
+    (:func:`engines.reference`).
+    """
+    found: list[float] = engines.reference(
+        'vehicles/' + key, lambda: summary(run_omi(ground, inputs, seconds, **kwargs))
+    )
+    return found
 
 
 @dataclasses.dataclass(frozen=True)
@@ -190,7 +240,11 @@ def run_omi(
     start: tuple[float, float, float] = (0.0, 0.62, 0.0),
     heading: float = 0.0,
 ) -> Drive:
-    """Drive the omi_physics car."""
+    """Drive the omi_physics car; needs omi_physics."""
+    from omi_physics import model  # noqa: PLC0415 omi_physics is optional: the recorded answers stand in
+    from omi_physics import vehicle as omi_vehicle  # noqa: PLC0415 omi_physics is optional
+    from omi_physics import world as omi  # noqa: PLC0415 omi_physics is optional
+
     world = omi.PhysicsWorld()
     for piece in ground.pieces:
         shape = world.add_shape(model.Shape.box(piece.size))
@@ -222,7 +276,9 @@ def run_omi(
         collider=model.Collider(shape=chassis),
         position=start,
     )
-    car = omi_vehicle.RaycastVehicle(world, body, wheels(), tuning())
+    car = omi_vehicle.RaycastVehicle(
+        world, body, omi_vehicle.car_wheels(**WHEELS), omi_vehicle.VehicleTuning(**TUNING)
+    )
     car.place(start, heading)
     rows: dict[str, list[Any]] = {
         k: [] for k in ('time', 'position', 'velocity', 'forward', 'up', 'grounded', 'impact')

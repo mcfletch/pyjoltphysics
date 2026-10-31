@@ -209,10 +209,9 @@ def run_omi(bodies: list[Body], ticks: int) -> Trace:
 
 # -- omi_physics' recorded answers ---------------------------------------------
 
-#: omi_physics' answers to the scenes of ``test_scenes.py``, by key, recorded from
-#: omi_physics 0.4 on 2026-10-31. omi_physics is deprecated and leaves the
-#: workspace with its engine; these numbers keep its answers as the reference
-#: the Jolt side is compared with once it is gone.
+#: omi_physics' answers to the differential scenes, by key, recorded from
+#: omi_physics 0.4: the reference the Jolt side is compared with where
+#: omi_physics is not installed.
 GOLDEN = Path(__file__).with_name('omi_golden.json')
 #: Set to a path, a run writes the answers it computed there instead of checking them.
 RECORD = 'PYJOLTPHYSICS_RECORD_OMI'

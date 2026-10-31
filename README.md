@@ -175,15 +175,19 @@ python benchmarks/vehicles.py --threads 1 8       # ten cars on a height field
 python benchmarks/ragdolls_cloth.py --threads 1 8 # 20 ragdolls and 5 cloths of 1,024 vertices
 ```
 
-`tests/differential/` runs each scene through Jolt and through `omi_physics`
-and compares them within the tolerance each test states: shapes resting on
-box, mesh and height field grounds, slides by friction, bounces, stacks, a
-pyramid, stairs, triggers, continuous detection, a bin of 1,000 boxes, a
-compound, and characters (a run across a height field, stairs, slopes, a jump
-at gravity 42, a fall) against omi_physics' controller, and glisteel's car
-(settling, acceleration, braking, cornering, a jump, a wall, a banked road,
-bumps) against omi_physics' raycast vehicle. It is marked `differential` and skipped where `omi_physics` is not
-installed. omi_physics has no ragdoll or soft body, so `tests/test_ragdolls.py`
+`tests/differential/` compares Jolt with omi_physics, the reference engine,
+within the tolerance each test states: shapes resting on box, mesh and height
+field grounds, slides by friction, bounces, stacks, a pyramid, stairs,
+triggers, continuous detection, a bin of 1,000 boxes, a compound, characters (a
+run across a height field, stairs, slopes, a jump at gravity 42, a fall)
+against omi_physics' controller, and glisteel's car (settling, acceleration,
+braking, cornering, a jump, a wall, a banked road, bumps) against omi_physics'
+raycast vehicle. omi_physics' side is its recorded answer
+(`tests/differential/omi_golden.json`), so the suite runs without it; where
+`omi_physics` is installed each recorded answer is also checked against a live
+run, within 0.1% or 0.1 mm. `PYJOLTPHYSICS_RECORD_OMI=<path>` writes the
+answers a run computes to `<path>` instead. The tests are marked
+`differential`. omi_physics has no ragdoll or soft body, so `tests/test_ragdolls.py`
 and `tests/test_softbodies.py` hold those to analytic expectations: rest
 within the joint limits, the animated pose to 1 mm, a hanging cloth's pins to
 0.1 mm, no vertex inside a sphere by more than its radius, a rope's length.

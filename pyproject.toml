@@ -99,7 +99,7 @@ addopts = "-ra --doctest-modules --import-mode=importlib"
 # tests/differential imports its scene runner as ``differential.engines``.
 pythonpath = ["tests"]
 markers = [
-    "differential: compares Jolt with omi_physics; skipped where omi_physics is not installed",
+    "differential: compares Jolt with omi_physics' recorded answers, and with a live run where omi_physics is installed",
     "serial: measures wall-clock time against a bound; run apart from the rest of the suite",
 ]
 
