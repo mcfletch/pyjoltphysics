@@ -68,7 +68,7 @@ bool RagdollSystem::owns(Uid uid) const { return bones_.count(uid) != 0; }
 
 bool RagdollSystem::driving() const {
     for (const auto &doll : ragdolls_)
-        if (doll->mode != RagdollMode::Limp || doll->strength > 0.0f)
+        if (doll->animated() && (doll->mode != RagdollMode::Limp || doll->strength > 0.0f))
             return true;
     return false;
 }
@@ -243,6 +243,7 @@ void RagdollSystem::enter(Ragdoll &doll, RagdollMode mode, double blend, double 
     }
     doll.mode = mode;
     doll.motors_dirty = true;
+    doll.changed = 2;
 }
 
 bool RagdollSystem::set_mode(RagdollId id, RagdollMode mode, double blend, double time) {
@@ -271,6 +272,7 @@ bool RagdollSystem::set_pose(const SetRagdollPose &pose) {
         doll->position = JPH::RVec3(pose.position[0], pose.position[1], pose.position[2]);
         doll->rotation = quat(pose.rotation);
     }
+    doll->changed = 2;
     return true;
 }
 
@@ -287,6 +289,7 @@ bool RagdollSystem::set_clip(const SetRagdollClip &clip, double time) {
     doll->clip_translations = clip.translations;
     doll->clip_loop = clip.loop;
     doll->clip_start = time;
+    doll->changed = 2;
     return true;
 }
 
@@ -297,6 +300,7 @@ bool RagdollSystem::set_strength(RagdollId id, const std::vector<double> &streng
     for (size_t i = 0; i < strength.size(); ++i)
         doll->desc.bones[i * kBoneParamCount + kBoneStrength] = strength[i];
     doll->motors_dirty = true;
+    doll->changed = 2;
     return true;
 }
 
@@ -379,7 +383,15 @@ void RagdollSystem::before_step(double time, double dt) {
                                 : std::max(doll.strength_target, doll.strength - step);
             doll.motors_dirty = true;
         }
+        const bool moving = doll.animated();
+        if (doll.changed > 0)
+            --doll.changed;
         if (doll.mode == RagdollMode::Kinematic) {
+            // A still target was reached by the tick after its last change; one
+            // more move to it leaves the bones at rest.
+            if (!moving && !doll.kinematic_moved)
+                continue;
+            doll.kinematic_moved = moving;
             target(doll, end, scratch_position_, scratch_rotation_);
             if (doll.blend_time > 0.0) {
                 const double s = (end - doll.blend_start) / doll.blend_time;
@@ -401,14 +413,20 @@ void RagdollSystem::before_step(double time, double dt) {
             apply_motors(doll);
         if (doll.strength <= 0.0f)
             continue;
+        bool asleep = false, awake = false;
+        for (const JPH::BodyID &id : ids) {
+            const bool active = bodies.IsActive(id);
+            asleep = asleep || !active;
+            awake = awake || active;
+        }
+        // Bones asleep at a still target hold it until something wakes them.
+        if (!moving && !awake)
+            continue;
         target(doll, end, scratch_position_, scratch_rotation_, &scratch_local_);
         for (size_t i = 0; i < ids.size(); ++i)
             if (JPH::SwingTwistConstraint *joint = swing_twist(*doll.ragdoll, int(i)))
                 joint->SetTargetOrientationBS(scratch_local_[i]);
-        bool asleep = false;
-        for (const JPH::BodyID &id : ids)
-            asleep = asleep || !bodies.IsActive(id);
-        if (asleep)
+        if (moving && asleep)
             bodies.ActivateBodies(ids.data(), int(ids.size()));
         const double *p = doll.desc.params.data();
         const float force_limit = float(p[kRagRootForce]) * doll.strength;
@@ -441,9 +459,9 @@ void RagdollSystem::before_step(double time, double dt) {
         if (torque.Length() > torque_limit)
             torque = torque.NormalizedOr(JPH::Vec3::sZero()) * torque_limit;
         if (force_limit > 0.0f)
-            bodies.AddForce(ids[0], force);
+            bodies.AddForce(ids[0], force, JPH::EActivation::DontActivate);
         if (torque_limit > 0.0f)
-            bodies.AddTorque(ids[0], torque);
+            bodies.AddTorque(ids[0], torque, JPH::EActivation::DontActivate);
     }
 }
 

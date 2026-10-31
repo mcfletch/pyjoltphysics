@@ -156,6 +156,14 @@ struct Ragdoll {
     std::vector<JPH::Quat> from_rotation;
     double blend_start = 0.0, blend_time = 0.0;
     bool motors_dirty = true;
+    // Ticks the pose target is still to be driven after a change to it.
+    int changed = 2;
+    // Kinematic bones were moved last tick and still carry the velocity that took them.
+    bool kinematic_moved = false;
+    // Whether the pose target moves: a clip, a blend, a strength ramp or a recent change.
+    bool animated() const {
+        return !clip_times.empty() || blend_time > 0.0 || strength != strength_target || changed > 0;
+    }
     // Bone pairs kept apart by the group filter, as indices.
     std::vector<std::pair<int, int>> pairs;
 };
@@ -188,7 +196,8 @@ public:
     void bodies_of(RagdollId id, std::vector<JPH::BodyID> &bodies, std::vector<Uid> &uids) const;
     // Whether a bone of some ragdoll is this uid.
     bool owns(Uid uid) const;
-    // Whether any ragdoll is driven, which keeps a lockstep world stepping.
+    // Whether any ragdoll's pose target moves, which keeps the world stepping;
+    // a still target leaves still bones to sleep.
     bool driving() const;
     std::vector<RagdollId> ids() const;
     bool empty() const { return ragdolls_.empty(); }

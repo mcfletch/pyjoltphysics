@@ -76,6 +76,7 @@ struct AddPushes {
     Push kind;
     std::vector<Uid> uids;
     std::vector<double> values;  // (n, 3) N, N s or N m
+    std::vector<double> points;  // (n, 3) world points a force or impulse acts at; empty: the centres of mass
 };
 
 struct SetGravity {

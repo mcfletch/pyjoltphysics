@@ -257,7 +257,9 @@ def test_powered_ragdoll_struck_recovers_its_pose(make_world: MakeWorld) -> None
     head = settings.bone_index('head')
     for doll in (powered, limp):
         doll.hit(arm, (0.0, 0.0, 40.0))
-        doll.hit(head, (25.0, 0.0, 0.0))
+        # Above the head's joint, so the blow turns the head as well as pushing it.
+        joints, _ = doll.pose()
+        doll.hit(head, (25.0, 0.0, 0.0), point=joints[head] + (0.0, 0.15, 0.0))
     world.run_ticks(int(0.1 * HZ))
     struck = _deviation(settings, powered)
     assert struck > 0.15
@@ -417,3 +419,30 @@ def test_bad_ragdoll_commands_are_refused(make_world: MakeWorld) -> None:
         doll.play(np.array([0.0, 0.0]), np.zeros((2, len(settings.bones), 4)) + (0, 0, 0, 1))
     with pytest.raises(ValueError):
         doll.set_mode(RagdollMode.LIMP, blend=-1.0)
+
+
+def test_still_ragdolls_sleep_and_wake_for_a_new_pose(make_world: MakeWorld) -> None:
+    world = make_world(tick_hz=HZ, threads=1)
+    world.add_bodies(floor())
+    settings = _humanoid(root_force=4000.0, root_torque=1500.0)
+    powered = world.add_ragdoll(settings, position=(0.0, 0.05, 0.0), mode=RagdollMode.POWERED)
+    kinematic = world.add_ragdoll(settings, position=(3.0, 0.0, 0.0), mode=RagdollMode.KINEMATIC)
+    world.run_ticks(int(4 * HZ))
+    snap = latest(world)
+    for doll in (powered, kinematic):
+        assert not snap.awake[snap.rows_of(doll.bones)].any()
+    standing, _ = powered.pose()
+    assert standing[0, 1] > 0.9
+    world.reset_stats()
+    world.run_ticks(10)
+    assert world.stats()['quiet_ticks'] > 0
+    rotations = settings.rest_rotations
+    rotations[settings.bone_index('head')] = _quat((0.0, 1.0, 0.0), 0.5)
+    for doll in (powered, kinematic):
+        doll.set_pose(rotations)
+    world.run_ticks(int(1.0 * HZ))
+    for doll in (powered, kinematic):
+        _, orientation = doll.pose()
+        local = _local_rotations(settings, orientation)
+        head = settings.bone_index('head')
+        assert _angle(_qmul(_conj(rotations[head]), local[head])) < 0.05

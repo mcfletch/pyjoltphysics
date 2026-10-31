@@ -362,3 +362,29 @@ def test_a_kinematic_body_pushes_a_dynamic_one(make_world: MakeWorld) -> None:
     assert snapshot.motion_type[rows[int(pusher)]] == MotionType.KINEMATIC
     assert snapshot.position[rows[int(pusher)], 0] == pytest.approx(2.0, abs=1e-6)
     assert snapshot.position[rows[int(crate)], 0] > 2.5
+
+
+def test_impulse_and_force_at_a_point_turn_the_body(make_world: MakeWorld) -> None:
+    world = make_world(tick_hz=100.0, threads=1, gravity=(0.0, 0.0, 0.0))
+    uids, _ = world.add_bodies(
+        BodyBatch.spheres(
+            [(0.0, 0.0, 0.0), (5.0, 0.0, 0.0)],
+            radius=0.5,
+            mass=2.0,
+            linear_damping=0.0,
+            angular_damping=0.0,
+        )
+    )
+    a, b = (int(u) for u in uids)
+    # 1 N s along +z at 0.5 m along +x from the centre: v = J / m, w = r x J / I.
+    world.add_impulses([a], [(0.0, 0.0, 1.0)], points=[(0.5, 0.0, 0.0)])
+    # 10 N for one 0.01 s step at the same lever: the same impulse spread over the step.
+    world.add_forces([b], [(0.0, 0.0, 100.0)], points=[(5.5, 0.0, 0.0)])
+    world.run_ticks(1)
+    state = world.bodies_state([a, b])
+    inertia = 0.4 * 2.0 * 0.5**2
+    for row in range(2):
+        assert np.allclose(state.linear_velocity[row], (0.0, 0.0, 0.5), atol=1e-4)
+        assert np.allclose(state.angular_velocity[row], (0.0, -0.5 / inertia, 0.0), atol=1e-3)
+    with pytest.raises(ValueError):
+        world.add_impulses([a], [(0.0, 0.0, 1.0)], points=[(0.0, 0.0, 0.0), (1.0, 0.0, 0.0)])

@@ -424,9 +424,14 @@ nb::dict shape_info(World &world, ShapeId id) {
     return out;
 }
 
-uint64_t pushes(World &world, Push kind, const Uids &ids, const Vec3s &values, uint64_t at_tick) {
-    AddPushes push{kind, uids(ids), copy<double>(values, ids.shape(0), "values")};
+uint64_t pushes(World &world, Push kind, const Uids &ids, const Vec3s &values, uint64_t at_tick,
+               const std::optional<Vec3s> &points = std::nullopt) {
+    AddPushes push{kind, uids(ids), copy<double>(values, ids.shape(0), "values"), {}};
     check_finite(push.values, "values");
+    if (points) {
+        push.points = copy<double>(*points, ids.shape(0), "points");
+        check_finite(push.points, "points");
+    }
     return world.core().submit(Command(std::move(push)), at_tick);
 }
 
@@ -1732,16 +1737,16 @@ void bind_world(nb::module_ &m) {
             nb::arg("at_tick") = 0)
         .def(
             "add_forces",
-            [](World &w, const Uids &ids, const Vec3s &values, uint64_t at_tick) {
-                return pushes(w, Push::Force, ids, values, at_tick);
+            [](World &w, const Uids &ids, const Vec3s &values, uint64_t at_tick, const std::optional<Vec3s> &points) {
+                return pushes(w, Push::Force, ids, values, at_tick, points);
             },
-            nb::arg("uids"), nb::arg("values"), nb::arg("at_tick") = 0)
+            nb::arg("uids"), nb::arg("values"), nb::arg("at_tick") = 0, nb::arg("points") = nb::none())
         .def(
             "add_impulses",
-            [](World &w, const Uids &ids, const Vec3s &values, uint64_t at_tick) {
-                return pushes(w, Push::Impulse, ids, values, at_tick);
+            [](World &w, const Uids &ids, const Vec3s &values, uint64_t at_tick, const std::optional<Vec3s> &points) {
+                return pushes(w, Push::Impulse, ids, values, at_tick, points);
             },
-            nb::arg("uids"), nb::arg("values"), nb::arg("at_tick") = 0)
+            nb::arg("uids"), nb::arg("values"), nb::arg("at_tick") = 0, nb::arg("points") = nb::none())
         .def(
             "add_torques",
             [](World &w, const Uids &ids, const Vec3s &values, uint64_t at_tick) {

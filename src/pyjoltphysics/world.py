@@ -563,15 +563,47 @@ class World:
             at_tick,
         )
 
-    def add_forces(self, uids: npt.ArrayLike, forces: npt.ArrayLike, at_tick: int = 0) -> int:
-        """Queue forces (N) at the centres of mass, acting over the next step."""
+    def add_forces(
+        self,
+        uids: npt.ArrayLike,
+        forces: npt.ArrayLike,
+        at_tick: int = 0,
+        points: npt.ArrayLike | None = None,
+    ) -> int:
+        """Queue forces (N) acting over the next step, at the centres of mass or at world ``points``."""
         ids = _uids(uids)
-        return self._native.add_forces(ids, _vectors(forces, len(ids), 3, 'forces'), at_tick)
+        return self._native.add_forces(
+            ids, _vectors(forces, len(ids), 3, 'forces'), at_tick, self._points(points, len(ids))
+        )
 
-    def add_impulses(self, uids: npt.ArrayLike, impulses: npt.ArrayLike, at_tick: int = 0) -> int:
-        """Queue impulses (N s) at the centres of mass, changing velocity at once."""
+    def add_impulses(
+        self,
+        uids: npt.ArrayLike,
+        impulses: npt.ArrayLike,
+        at_tick: int = 0,
+        points: npt.ArrayLike | None = None,
+    ) -> int:
+        """Queue impulses (N s), changing velocity at once.
+
+        At the centres of mass, or at world ``points`` (n, 3), where an impulse
+        also turns the body: a shot or a blow on one bone of a ragdoll.
+        """
         ids = _uids(uids)
-        return self._native.add_impulses(ids, _vectors(impulses, len(ids), 3, 'impulses'), at_tick)
+        return self._native.add_impulses(
+            ids,
+            _vectors(impulses, len(ids), 3, 'impulses'),
+            at_tick,
+            self._points(points, len(ids)),
+        )
+
+    @staticmethod
+    def _points(points: npt.ArrayLike | None, count: int) -> npt.NDArray[np.float64] | None:
+        if points is None:
+            return None
+        array = np.asarray(points, dtype=np.float64)
+        if array.shape != (count, 3):
+            raise ValueError('points has shape %s where (%d, 3) is needed' % (array.shape, count))
+        return np.ascontiguousarray(array)
 
     def add_torques(self, uids: npt.ArrayLike, torques: npt.ArrayLike, at_tick: int = 0) -> int:
         """Queue torques (N m), acting over the next step."""

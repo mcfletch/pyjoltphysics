@@ -648,9 +648,18 @@ class Ragdoll:
         """Queue the motors' torque limit of each bone, N m (one for all, or one a bone)."""
         return self.world.set_ragdoll_strength(self, strength, at_tick)
 
-    def hit(self, bone: int, impulse: Sequence[float], at_tick: int = 0) -> int:
-        """Queue an impulse (N s) on bone index ``bone``, at its centre of mass."""
-        return self.world.add_impulses([int(self.bones[bone])], [tuple(impulse)], at_tick)
+    def hit(
+        self,
+        bone: int,
+        impulse: Point,
+        point: Point | None = None,
+        at_tick: int = 0,
+    ) -> int:
+        """Queue an impulse (N s) on bone index ``bone``, at its centre of mass or at a world ``point``."""
+        uid = [int(self.bones[bone])]
+        blow = [tuple(float(v) for v in impulse)]
+        at = None if point is None else [tuple(float(v) for v in point)]
+        return self.world.add_impulses(uid, blow, at_tick, points=at)
 
     def remove(self, at_tick: int = 0) -> int:
         """Queue removing the ragdoll and its bodies."""

@@ -129,8 +129,8 @@ skipped and counted in `stats()['rejected']`.
 | `swap_bodies(remove, batch)` | remove bodies and add a `BodyBatch` in one batch, so in one tick; returns `(uids, seq)` |
 | `set_transforms(uids, positions, orientations=(0, 0, 0, 1))` | teleport; waking moving bodies |
 | `set_velocities(uids, linear=None, angular=None)` | m/s and rad/s; None leaves one as it is |
-| `add_forces(uids, forces)` | N at the centre of mass, acting over the next step |
-| `add_impulses(uids, impulses)` | N s, changing the velocity at once |
+| `add_forces(uids, forces, points=None)` | N at the centre of mass, or at world `points` (n, 3), acting over the next step |
+| `add_impulses(uids, impulses, points=None)` | N s, changing the velocity at once; at world `points` they turn the body too |
 | `add_torques(uids, torques)` | N m, over the next step |
 | `set_gravity(gravity)` | m/s2; wakes every dynamic body |
 | `activate(uids)` | wake bodies |
@@ -818,7 +818,10 @@ bone in ragdoll order: `bone_uid`, `bone_position` (float64) and
 `bone_orientation`. `rows.bones(i)` is ragdoll row `i`'s slice. `Ragdoll.pose()`
 reads its own rows.
 
-Limits: a hit is an impulse at the bone's centre of mass; a powered ragdoll's
+`hit(bone, impulse, point=None)` is an impulse on one bone, at its centre of
+mass or at a world point (`add_impulses` with `points`).
+
+Limits: a powered ragdoll's
 root spring stands in for balance, which nothing here computes from the feet;
 `save_state` holds the bodies and constraints, and the mode, strength, pose
 target and clip are the world thread's and are not saved. A world with a

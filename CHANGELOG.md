@@ -48,6 +48,7 @@
 - `stats()['vehicles']`; `pyjoltphysics.testing.vehicle_digest`.
 - Ragdolls: Jolt's `Ragdoll`, a body a bone with swing-twist limits: `World.add_ragdoll`, `remove_ragdolls`, `set_ragdoll_modes`, `set_ragdoll_pose`, `set_ragdoll_clip`, `set_ragdoll_strength`; `Ragdoll`, `RagdollSettings` (`Bone`, `from_skeleton`, `humanoid`, `as_dict`, `from_dict`), `RagdollMode` (kinematic, powered with a root spring, limp) with blends; `forward_kinematics`; `Snapshot.ragdolls` (`RagdollRows`).
 - Soft bodies: `World.add_soft_body`, `set_soft_pins`, `set_wind`; `SoftBody`, `SoftBodySettings` (`cloth`, `rope`, `ball`, `from_mesh`, `as_dict`, `from_dict`), `Bend`, `LongRange`; pins to world points or bodies; `Snapshot.soft_bodies` (`SoftBodyRows`), vertices and normals copied only for bodies that moved.
+- `add_forces` and `add_impulses` take world `points` to act at.
 - `stats()['ragdolls']`, `stats()['soft_bodies']`; `pyjoltphysics.testing.ragdoll_digest` and `soft_digest`.
 
 - `jolt_version()`, `build_options()` and `selftest()` over the compiled module `pyjoltphysics._native`.

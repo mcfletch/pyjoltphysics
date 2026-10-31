@@ -267,12 +267,19 @@ void WorldCore::apply(AddPushes &push, uint64_t) {
             continue;
         }
         const JPH::Vec3 value = vec3(push.values, i);
+        const bool at_point = !push.points.empty();
         switch (push.kind) {
         case Push::Force:
-            bodies.AddForce(row->id, value);
+            if (at_point)
+                bodies.AddForce(row->id, value, rvec3(push.points, i));
+            else
+                bodies.AddForce(row->id, value);
             break;
         case Push::Impulse:
-            bodies.AddImpulse(row->id, value);
+            if (at_point)
+                bodies.AddImpulse(row->id, value, rvec3(push.points, i));
+            else
+                bodies.AddImpulse(row->id, value);
             break;
         case Push::Torque:
             bodies.AddTorque(row->id, value);
