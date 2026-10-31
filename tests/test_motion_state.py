@@ -70,6 +70,41 @@ def test_mass_changes_the_answer_to_an_impulse(make_world: MakeWorld) -> None:
     assert heavy[0] == pytest.approx(0.5, rel=1e-4)
 
 
+def test_inertia_given_is_the_inertia_a_torque_meets(make_world: MakeWorld) -> None:
+    world = make_world(tick_hz=60.0, threads=1, gravity=(0.0, 0.0, 0.0), allow_sleeping=False)
+    uids, _ = world.add_bodies(BodyBatch.spheres([(0.0, 0.0, 0.0), (5.0, 0.0, 0.0)], radius=0.5))
+    world.set_motion(uids[:1], inertia=np.diag([1.0, 0.5, 2.0]))
+    world.set_motion(uids[1:], inertia=[[2.0, 0.0, 0.0], [0.0, 1.0, 0.0], [0.0, 0.0, 4.0]],
+                     mass=3.0)
+    for _ in range(60):
+        world.add_torques(uids, (0.0, 1.0, 0.0))
+        world.run_ticks(1)
+    snap = latest(world)
+    spin = snap.angular_velocity[snap.rows_of(uids)]
+    assert np.allclose(spin, ((0.0, 2.0, 0.0), (0.0, 1.0, 0.0)), rtol=1e-3, atol=1e-6)
+
+
+def test_inertia_off_its_principal_axes(make_world: MakeWorld) -> None:
+    world = make_world(tick_hz=60.0, threads=1, gravity=(0.0, 0.0, 0.0), allow_sleeping=False)
+    (ball,), _ = world.add_bodies(BodyBatch.spheres([(0.0, 0.0, 0.0)], radius=0.5))
+    tensor = np.array([[2.0, 0.5, 0.0], [0.5, 2.0, 0.0], [0.0, 0.0, 1.0]])
+    world.set_motion([ball], inertia=tensor)
+    world.run_ticks(1)
+    world.add_torques([ball], (60.0, 0.0, 0.0))
+    world.run_ticks(1)
+    snap = latest(world)
+    expected = np.linalg.solve(tensor, (1.0, 0.0, 0.0))
+    assert np.allclose(snap.angular_velocity[snap.rows[ball]], expected, rtol=1e-2, atol=1e-3)
+
+
+def test_set_motion_refuses_an_inertia_that_is_not_positive(make_world: MakeWorld) -> None:
+    world = make_world()
+    with pytest.raises(ValueError, match='inertia'):
+        world.set_motion([1], inertia=np.diag([1.0, -1.0, 1.0]))
+    with pytest.raises(ValueError, match='inertia'):
+        world.set_motion([1], inertia=np.ones(4))
+
+
 def test_nan_keeps_a_value(make_world: MakeWorld) -> None:
     world = make_world(tick_hz=60.0, threads=1, allow_sleeping=False)
     (ball,), _ = world.add_bodies(BodyBatch.spheres([(0.0, 10.0, 0.0)], radius=0.5,

@@ -1349,10 +1349,14 @@ void bind_world(nb::module_ &m) {
         .def(
             "set_motion",
             [](World &w, const Uids &ids, const Floats &mass, const Floats &linear, const Floats &angular,
-               const Floats &gravity, uint64_t at_tick) {
+               const Floats &gravity, const Floats &inertia, uint64_t at_tick) {
                 const size_t n = ids.shape(0);
-                SetMotion set{uids(ids), copy<float>(mass, n, "mass"), copy<float>(linear, n, "linear_damping"),
-                              copy<float>(angular, n, "angular_damping"), copy<float>(gravity, n, "gravity_factor")};
+                SetMotion set{uids(ids),
+                              copy<float>(mass, n, "mass"),
+                              copy<float>(linear, n, "linear_damping"),
+                              copy<float>(angular, n, "angular_damping"),
+                              copy<float>(gravity, n, "gravity_factor"),
+                              copy<float>(inertia, 9 * n, "inertia")};
                 for (size_t i = 0; i < n; ++i) {
                     if (!std::isnan(set.mass[i]) && !(std::isfinite(set.mass[i]) && set.mass[i] > 0.0f))
                         throw std::invalid_argument("mass is a finite number above 0");
@@ -1361,11 +1365,20 @@ void bind_world(nb::module_ &m) {
                             throw std::invalid_argument("damping is finite and not negative");
                     if (!std::isnan(set.gravity_factor[i]) && !std::isfinite(set.gravity_factor[i]))
                         throw std::invalid_argument("gravity_factor is finite");
+                    const float *tensor = &set.inertia[9 * i];
+                    if (!std::isnan(tensor[0])) {
+                        for (int k = 0; k < 9; ++k)
+                            if (!std::isfinite(tensor[k]))
+                                throw std::invalid_argument("inertia is finite");
+                        for (int k = 0; k < 3; ++k)
+                            if (!(tensor[4 * k] > 0.0f))
+                                throw std::invalid_argument("inertia has its diagonal above 0");
+                    }
                 }
                 return w.core().submit(Command(std::move(set)), at_tick);
             },
             nb::arg("uids"), nb::arg("mass"), nb::arg("linear_damping"), nb::arg("angular_damping"),
-            nb::arg("gravity_factor"), nb::arg("at_tick") = 0)
+            nb::arg("gravity_factor"), nb::arg("inertia"), nb::arg("at_tick") = 0)
         .def(
             "set_flags",
             [](World &w, const Uids &ids, uint32_t bits, bool on, uint64_t at_tick) {

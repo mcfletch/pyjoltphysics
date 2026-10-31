@@ -512,6 +512,20 @@ void WorldCore::apply(SetMotion &set, uint64_t) {
             motion->SetInverseMass(new_inverse);
             motion->SetInverseInertia(motion->GetInverseInertiaDiagonal() * scale, motion->GetInertiaRotation());
         }
+        if (!std::isnan(set.inertia[9 * i]) && body->IsDynamic()) {
+            JPH::MassProperties given;
+            given.mMass = 1.0f / motion->GetInverseMass();
+            given.mInertia = JPH::Mat44::sIdentity();
+            for (int r = 0; r < 3; ++r)
+                for (int c = 0; c < 3; ++c)
+                    given.mInertia(r, c) = set.inertia[9 * i + 3 * r + c];
+            JPH::Mat44 rotation;
+            JPH::Vec3 diagonal;
+            if (given.DecomposePrincipalMomentsOfInertia(rotation, diagonal) && diagonal.ReduceMin() > 0.0f)
+                motion->SetInverseInertia(diagonal.Reciprocal(), rotation.GetQuaternion());
+            else
+                ++rejected_;
+        }
         if (body->IsDynamic())
             bodies.ActivateBody(row->id);
     }

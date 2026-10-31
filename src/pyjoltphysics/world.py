@@ -970,13 +970,16 @@ class World:
         linear_damping: npt.ArrayLike | None = None,
         angular_damping: npt.ArrayLike | None = None,
         gravity_factor: npt.ArrayLike | None = None,
+        inertia: npt.ArrayLike | None = None,
         at_tick: int = 0,
     ) -> int:
         """Queue new motion properties for moving bodies; None, or NaN in an array, keeps a value.
 
         ``mass`` (kg, dynamic bodies) scales the inertia with it; damping is
-        1/s; ``gravity_factor`` multiplies gravity. A static body is rejected.
-        Each changed dynamic body is woken.
+        1/s; ``gravity_factor`` multiplies gravity. ``inertia`` (kg m2, dynamic
+        bodies) is a 3x3 tensor about the centre of mass in the body's frame,
+        one for every body or (n, 3, 3); it applies after ``mass``. A static
+        body is rejected. Each changed dynamic body is woken.
         """
         ids = _uids(uids)
         n = len(ids)
@@ -984,12 +987,21 @@ class World:
         def column(values: npt.ArrayLike | None, name: str) -> np.ndarray:
             return _column(np.nan if values is None else values, n, np.float32, name)
 
+        tensors = np.full((n, 9), np.nan, dtype=np.float32)
+        if inertia is not None:
+            given = np.asarray(inertia, dtype=np.float32)
+            if given.shape not in ((3, 3), (n, 3, 3)):
+                raise ValueError('inertia is a 3x3 tensor or one a body, not shape %s'
+                                 % (given.shape,))
+            tensors[:] = given.reshape(-1, 9)
+
         return self._native.set_motion(
             ids,
             column(mass, 'mass'),
             column(linear_damping, 'linear_damping'),
             column(angular_damping, 'angular_damping'),
             column(gravity_factor, 'gravity_factor'),
+            tensors.reshape(-1),
             at_tick,
         )
 

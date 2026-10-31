@@ -131,6 +131,7 @@ struct SetMotion {
     std::vector<float> linear_damping;   // 1/s
     std::vector<float> angular_damping;  // 1/s
     std::vector<float> gravity_factor;
+    std::vector<float> inertia;          // 9 a body, row-major kg m2 about the centre of mass; NaN keeps
 };
 
 // Sets or clears flag bits a body may change after it is added (report, no sleep).
