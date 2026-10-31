@@ -538,8 +538,11 @@ exactly, `v dt - g dt^2 / 2` a tick, so every sample of a jump lies on its
 parabola and the apex is `jumpHeight` above the launch at any tick rate
 (tested to 1e-6 m at 60, 120 and 240 Hz with gravity 42). The horizontal input
 is turned along walkable ground at the same speed, so a slope is climbed at the
-pace of the flat. A character on walkable ground is given no fall, so one at
-rest, standing or knocked down, stays where it is on a slope. A grounded character rides what it stands on: a kinematic
+pace of the flat. A character on walkable ground that touches only static
+bodies falls along the ground's normal rather than straight down, so one at
+rest, standing or knocked down, stays where it is on a slope; touching a body
+or a character that moves, it falls straight down and is slid aside by what
+presses on it. A grounded character rides what it stands on: a kinematic
 platform's velocity at its feet carries it, up and sideways.
 
 `Character` methods queue inputs and return the batch's sequence number; each

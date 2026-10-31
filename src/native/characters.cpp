@@ -549,6 +549,17 @@ void track_touches(const JPH::PhysicsSystem &system, Character &c, uint32_t tick
     c.touching.swap(uids);
 }
 
+// Whether every body the capsule touched in its last update is static.
+bool touches_only_static(const Character &c) {
+    for (const JPH::CharacterContact &contact : c.cv->GetActiveContacts()) {
+        if (contact.mWasDiscarded || contact.mDistance >= kTouchSkin)
+            continue;
+        if (!contact.mCharacterIDB.IsInvalid() || contact.mMotionTypeB != JPH::EMotionType::Static)
+            return false;
+    }
+    return true;
+}
+
 void step_one(const JPH::PhysicsSystem &system, Character &c, double dt, uint32_t tick, JPH::TempAllocator &temp) {
     const auto dt_f = float(dt);
     // Velocities handed to Jolt cover a distance in Jolt's float time step.
@@ -628,15 +639,17 @@ void step_one(const JPH::PhysicsSystem &system, Character &c, double dt, uint32_
         return;
     }
     const double v0 = c.vy;
-    // A walker standing on walkable ground is given no fall: CharacterVirtual
-    // turns a velocity into a slope into motion along it, so a fall each tick
-    // would carry a walker at rest down any slope. Walking off an edge leaves
-    // the ground within the tick, and the fall starts on the next.
-    const bool resting = was_grounded && v0 <= 0.0 && c.walkable(c.ground_normal);
-    const double rise = resting ? 0.0 : c.fall(dt);
+    const double rise = c.fall(dt);
     const double impact = std::max(0.0, -c.vy);
-    const JPH::Vec3 velocity =
-        (horizontal + carried) * float(dt * per) + JPH::Vec3(0.0f, float(rise * per), 0.0f);
+    // A walker at rest on walkable static ground, touching nothing that moves,
+    // falls along the ground's normal, into it. CharacterVirtual turns the
+    // part of a velocity along a slope into motion, so a fall straight down
+    // would carry a walker at rest down any slope. A walker touching a body
+    // or a character that moves falls straight down, and is slid aside by
+    // what presses on it.
+    const bool resting = was_grounded && v0 <= 0.0 && c.walkable(c.ground_normal) && touches_only_static(c);
+    const JPH::Vec3 fall = resting ? c.ground_normal * float(rise * per) : JPH::Vec3(0.0f, float(rise * per), 0.0f);
+    const JPH::Vec3 velocity = (horizontal + carried) * float(dt * per) + fall;
     c.cv->SetLinearVelocity(velocity);
     update.mStickToFloorStepDown = JPH::Vec3::sZero();
     c.cv->ExtendedUpdate(dt_f, gravity, update, kEveryTree, c.layer_filter, c.body_filter, kEveryShape, temp);
