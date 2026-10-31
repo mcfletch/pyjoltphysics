@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import math
+
 import numpy as np
 import numpy.typing as npt
 import pytest
@@ -15,6 +17,7 @@ from pyjoltphysics import (
     SoftBodySettings,
     Track,
 )
+from pyjoltphysics.softbodies import iterations_for
 from pyjoltphysics.testing import MakeWorld, floor, latest
 
 HZ = 120.0
@@ -298,6 +301,7 @@ def test_long_range_attachments_limit_the_stretch(make_world: MakeWorld) -> None
             rows=11,
             mass=2.0,
             compliance=1e-2,
+            bend_compliance=math.inf,
             linear_damping=2.0,
             long_range=long_range,
         )
@@ -314,3 +318,37 @@ def test_long_range_attachments_limit_the_stretch(make_world: MakeWorld) -> None
     # Soft edges let the free corner sag past the cloth's depth; the attachments hold it near 1 m.
     assert stretched[LongRange.NONE] > 1.05
     assert stretched[LongRange.GEODESIC] < 1.005
+
+
+@pytest.mark.parametrize('side', [32, 40, 60, 80])
+def test_a_fine_cloth_dropped_at_60_hz_stays_whole(make_world: MakeWorld, side: int) -> None:
+    # Without bend constraints, or with too few iterations for its edges, Jolt's
+    # solver tears a cloth of edges this short apart within 0.6 s at 60 Hz.
+    world = make_world(tick_hz=60.0, threads=1)
+    world.add_bodies(BodyBatch.spheres([(0.0, 0.6, 0.0)], radius=0.6, motion=MotionType.STATIC))
+    cloth = SoftBodySettings.cloth(2.0, 2.0, columns=side, rows=side, mass=1.0, vertex_radius=0.01)
+    assert cloth.iterations == iterations_for(2.0 / (side - 1))
+    body = world.add_soft_body(cloth, position=(0.0, 1.6, 0.0))
+    world.run_ticks(60)
+    vertices = body.vertices()
+    assert np.abs(vertices).max() < 3.0
+    assert faces_stretch(cloth, vertices) < 2.0
+
+
+def faces_stretch(cloth: SoftBodySettings, vertices: npt.NDArray[np.float64]) -> float:
+    """The largest ratio of a face edge's length to its rest length."""
+    assert cloth.faces is not None
+    a, b = cloth.faces[:, 0], cloth.faces[:, 1]
+    rest = np.linalg.norm(cloth.positions[a] - cloth.positions[b], axis=1)
+    return float((np.linalg.norm(vertices[a] - vertices[b], axis=1) / rest).max())
+
+
+def test_iterations_rise_as_edges_shorten() -> None:
+    assert iterations_for(0.1) == 5
+    assert iterations_for(0.05) == 5
+    assert iterations_for(0.034) == 11
+    assert iterations_for(0.025) == 20
+    assert SoftBodySettings.cloth(1.0, 1.0, 3, 3).iterations == 5
+    assert SoftBodySettings.cloth(1.0, 1.0, 3, 3, iterations=7).iterations == 7
+    with pytest.raises(ValueError):
+        iterations_for(0.0)

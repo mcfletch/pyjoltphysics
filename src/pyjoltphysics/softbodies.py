@@ -46,7 +46,7 @@ from pyjoltphysics.queries import ALL_GROUPS
 if TYPE_CHECKING:
     from pyjoltphysics.world import World
 
-__all__ = ['Bend', 'LongRange', 'SoftBody', 'SoftBodyRows', 'SoftBodySettings']
+__all__ = ['Bend', 'LongRange', 'SoftBody', 'SoftBodyRows', 'SoftBodySettings', 'iterations_for']
 
 #: A pin set: vertex indices and their targets, (n, 3) world points or points in ``bodies``' frames.
 Pins = tuple[Sequence[int], npt.ArrayLike]
@@ -83,7 +83,12 @@ class SoftBodySettings:
     bend constraints come from the faces, unless ``edges`` (E, 2) are given
     with ``edge_compliance`` (E,). ``tetrahedra`` (T, 4) hold their volume
     with ``volume_compliance``. Compliances are m/N, 0 rigid and ``inf`` for
-    none. ``iterations`` is the solver's per step. ``linear_damping`` is
+    none. The bend constraints default to distance constraints of compliance
+    0.01: a cloth with none folds on what it meets and, with edges of 5 cm
+    or shorter, Jolt's solver tears it apart within a second at 60 Hz.
+    ``iterations`` is the solver's per step, each a substep; None takes
+    :func:`iterations_for` the shortest edge, which a cloth meeting a
+    surface at 60 Hz needs. ``linear_damping`` is
     1/s, ``max_velocity`` m/s and ``vertex_radius`` (m) the distance the
     vertices keep from the surfaces they meet. ``group``, ``mask``,
     ``filter``, ``material`` and ``flags`` are a body's.
@@ -98,13 +103,13 @@ class SoftBodySettings:
     masses: np.ndarray | None = None
     compliance: float = 0.0
     shear_compliance: float = 0.0
-    bend_compliance: float = math.inf
+    bend_compliance: float = 0.01
     bend: Bend = Bend.DISTANCE
     volume_compliance: float = 0.0
     pressure: float = 0.0
     long_range: LongRange = LongRange.NONE
     long_range_stretch: float = 1.0
-    iterations: int = 5
+    iterations: int | None = None
     linear_damping: float = 0.1
     max_velocity: float = 500.0
     friction: float = 0.2
@@ -151,6 +156,8 @@ class SoftBodySettings:
             self.edge_compliance = np.ascontiguousarray(
                 np.broadcast_to(np.asarray(compliance, dtype=np.float32), (len(self.edges),))
             )
+        if self.iterations is None:
+            self.iterations = iterations_for(self._shortest_edge())
         if not (math.isfinite(self.mass) and self.mass >= 0.0):
             raise ValueError('mass is finite and not negative, not %r' % (self.mass,))
         if self.masses is not None:
@@ -160,6 +167,19 @@ class SoftBodySettings:
 
     def __len__(self) -> int:
         return len(self.positions)
+
+    def _shortest_edge(self) -> float:
+        """The shortest edge of the faces, or of the explicit edges; inf with neither."""
+        if self.edges is not None and len(self.edges):
+            pairs = self.edges
+        elif self.faces is not None and len(self.faces):
+            f = self.faces
+            pairs = np.concatenate([f[:, [0, 1]], f[:, [1, 2]], f[:, [2, 0]]])
+        else:
+            return math.inf
+        lengths = np.linalg.norm(self.positions[pairs[:, 0]] - self.positions[pairs[:, 1]], axis=1)
+        lengths = lengths[lengths > 0.0]
+        return float(lengths.min()) if len(lengths) else math.inf
 
     def vertex_masses(self) -> npt.NDArray[np.float64]:
         """Return (V,) the mass of each vertex, kg."""
@@ -197,8 +217,7 @@ class SoftBodySettings:
         """Return a flat cloth ``width`` (x) by ``depth`` (z) metres in the y = 0 plane, centred.
 
         ``columns`` by ``rows`` vertices, row major from -x -z; faces up (+y).
-        ``values`` are further fields; the default bend is a distance
-        constraint of compliance ``bend_compliance`` (none unless given).
+        ``values`` are further fields.
         """
         if columns < 2 or rows < 2:
             raise ValueError('a cloth has at least 2 columns and 2 rows of vertices')
@@ -332,7 +351,7 @@ class SoftBodySettings:
             self.pressure,
             float(int(self.long_range)),
             self.long_range_stretch,
-            float(self.iterations),
+            float(self.iterations or 5),
             self.linear_damping,
             self.max_velocity,
             self.friction,
@@ -363,6 +382,19 @@ class SoftBodySettings:
             'pin_body': pin_body,
             'pin_point': pin_point,
         }
+
+
+def iterations_for(edge: float) -> int:
+    """Return the solver iterations a soft body of shortest edge ``edge`` (m) needs at 60 Hz.
+
+    5 from 5 cm up, rising with the square of the edge's shortfall: 11 at
+    3.4 cm, 20 at 2.5 cm. Measured on 2 m cloths of 40 to 80 vertices a side
+    dropped on a sphere; with fewer, edges under 5 cm are torn apart when the
+    cloth meets the sphere. A world stepped at 120 Hz needs about half.
+    """
+    if not edge > 0.0:
+        raise ValueError('an edge is longer than 0, not %r' % (edge,))
+    return max(5, math.ceil(5.0 * (0.05 / edge) ** 2))
 
 
 def pin_arrays(

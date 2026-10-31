@@ -862,14 +862,21 @@ tetrahedra=None, mass=1.0, masses=None, ...)`:
 | `faces` | (F, 3), counter-clockwise from the side the normal faces; edges, shear and bend constraints come from them unless `edges` is given |
 | `edges`, `edge_compliance` | (E, 2) and (E,) explicit edges |
 | `tetrahedra`, `volume_compliance` | (T, 4) volume constraints |
-| `compliance`, `shear_compliance`, `bend_compliance` | m/N; 0 rigid, `inf` none (bend is none by default) |
+| `compliance`, `shear_compliance`, `bend_compliance` | m/N; 0 rigid, `inf` none; bend 0.01 by default |
 | `bend` | `Bend.NONE`, `DISTANCE` or `DIHEDRAL` |
 | `pressure` | n R T (Pa m3) inside a closed surface |
 | `long_range`, `long_range_stretch` | `LongRange.NONE`, `EUCLIDEAN` or `GEODESIC` attachments to the nearest pinned vertex, and the slack allowed on the rest distance |
-| `iterations`, `linear_damping` (1/s), `max_velocity` (m/s) | the solver |
+| `iterations`, `linear_damping` (1/s), `max_velocity` (m/s) | the solver; iterations are substeps, None takes `softbodies.iterations_for(shortest edge)` |
 | `friction`, `restitution`, `gravity_factor`, `vertex_radius` (m) | contact; the vertices keep `vertex_radius` from surfaces |
 | `allow_sleep`, `double_sided` | sleeping; faces collide on both sides for queries |
 | `group`, `mask`, `filter`, `material`, `flags` | as a body's |
+
+Stability. A cloth with no bend constraints folds on what it meets, and with
+edges of 5 cm or shorter Jolt's solver tears it apart within a second at
+60 Hz (a 2 m cloth of 40 by 40 vertices on a sphere, reproduced with Jolt
+alone); the default distance bend of compliance 0.01 holds it. Shorter edges
+need more substeps: `iterations_for(edge)` is 5 from 5 cm, 11 at 3.4 cm and 20
+at 2.5 cm, measured at 60 Hz; a world at 120 Hz needs about half.
 
 Builders: `cloth(width, depth, columns, rows, mass)` (y = 0, centred, faces
 up; `corner_indices()`), `rope(points, segments=None, mass=0.1,
