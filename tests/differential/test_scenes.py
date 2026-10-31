@@ -4,6 +4,10 @@ Each test runs the same bodies from the same initial conditions at 120 Hz in
 both engines. Two solvers never agree to the bit, so each test names what it
 compares and its tolerance, with the reason. Where the engines legitimately
 differ, the test asserts the physically right bound on each and says so.
+
+omi_physics' side is its recorded answer (:func:`differential.engines.reference`),
+checked against a live run where omi_physics is installed, so this module runs
+without it.
 """
 
 from __future__ import annotations
@@ -19,10 +23,12 @@ from differential.engines import (
     Body,
     G,
     Spec,
+    Trace,
     grid_mesh,
     ground,
     heightfield_ground,
     mesh_ground,
+    reference,
     run_jolt,
     run_omi,
     tetra_hull,
@@ -63,7 +69,7 @@ def test_each_shape_rests_on_each_ground(
         Body(spec, (0.3, height + 0.5, -0.2), orientation=orientation),
     ]
     jolt = run_jolt(bodies, 360).last()[1, 1]
-    omi = run_omi(bodies, 360).last()[1, 1]
+    omi = reference(f'rest/{name}/{surface}', lambda: run_omi(bodies, 360).last()[1, 1])
     assert jolt == pytest.approx(height, abs=0.01)
     assert omi == pytest.approx(height, abs=0.01)
     assert jolt == pytest.approx(omi, abs=0.01)
@@ -92,11 +98,16 @@ def test_a_box_slides_down_a_slope_by_its_friction(surface: str, friction: float
     ticks = 132  # 0.1 s to settle onto the slope, then 1 s
     accel = max(0.0, G * (math.sin(theta) - friction * math.cos(theta)))
     expected = 0.5 * accel * 1.0**2
-    for trace in (run_jolt(bodies, ticks), run_omi(bodies, ticks)):
+
+    def slide(trace: Trace) -> tuple[float, float]:
         box = trace.position[:, 1]
-        along = float(np.linalg.norm(box[-1] - box[11]))
         # The box is already moving after the settling 0.1 s.
-        moving = float(np.linalg.norm(box[12] - box[10])) / (2 * DT)
+        return float(np.linalg.norm(box[-1] - box[11])), float(
+            np.linalg.norm(box[12] - box[10])
+        ) / (2 * DT)
+
+    omi = reference(f'slide/{surface}/{friction}', lambda: slide(run_omi(bodies, ticks)))
+    for along, moving in (slide(run_jolt(bodies, ticks)), omi):
         assert along == pytest.approx(expected + moving * 1.0, rel=0.1, abs=0.03)
 
 
@@ -111,12 +122,17 @@ def test_a_bounce_rebounds_as_high_on_each_ground(surface: str) -> None:
         GROUNDS[surface](restitution=e),
         Body(('sphere', 0.5), (0.0, 3.0, 0.0), restitution=e),
     ]
-    ratios = []
-    for trace in (run_jolt(bodies, 240), run_omi(bodies, 240)):
+
+    def rebound(trace: Trace) -> float:
         y = trace.position[:, 1, 1]
         inner = y[1:-1]
         peaks = inner[(inner > y[:-2]) & (inner >= y[2:])]
-        ratios.append((peaks[0] - 0.5) / 2.5)
+        return float((peaks[0] - 0.5) / 2.5)
+
+    ratios = [
+        rebound(run_jolt(bodies, 240)),
+        reference(f'rebound/{surface}', lambda: rebound(run_omi(bodies, 240))),
+    ]
     assert ratios[0] == pytest.approx(e * e, abs=0.05)
     assert ratios[0] == pytest.approx(ratios[1], abs=0.05)
 
@@ -129,11 +145,15 @@ def test_a_stack_of_five_settles_and_sleeps() -> None:
     bodies = [ground(0.6)] + [
         Body(('box', (1.0, 1.0, 1.0)), (0.0, 0.5 + k * 1.001, 0.0), friction=0.6) for k in range(5)
     ]
-    jolt, omi = run_jolt(bodies, 480), run_omi(bodies, 480)
-    for trace in (jolt, omi):
+
+    def stack(trace: Trace) -> tuple[float, float]:
         boxes = trace.last()[1:]
-        assert np.abs(boxes[:, [0, 2]]).max() < 0.02
-        assert boxes[-1, 1] == pytest.approx(4.5, abs=0.02)
+        return float(np.abs(boxes[:, [0, 2]]).max()), float(boxes[-1, 1])
+
+    jolt = run_jolt(bodies, 480)
+    for drift, top in (stack(jolt), reference('stack', lambda: stack(run_omi(bodies, 480)))):
+        assert drift < 0.02
+        assert top == pytest.approx(4.5, abs=0.02)
     assert not jolt.awake[1:].any()
 
 
@@ -151,10 +171,11 @@ def test_a_pyramid_settles_and_sleeps() -> None:
             places.append((x, 0.5 + level * 1.001, 0.0))
             bodies.append(Body(('box', (1.0, 1.0, 1.0)), places[-1], friction=0.7))
     want = np.array(places)
-    jolt, omi = run_jolt(bodies, 600), run_omi(bodies, 600)
+    jolt = run_jolt(bodies, 600)
+    omi = reference('pyramid', lambda: float(np.abs(run_omi(bodies, 600).last()[1:] - want).max()))
     assert np.abs(jolt.last()[1:] - want).max() < 0.01
     assert not jolt.awake[1:].any()
-    assert np.abs(omi.last()[1:] - want).max() < 0.05
+    assert omi < 0.05
 
 
 def stairs(steps: int = 5, rise: float = 0.3, run: float = 0.6) -> list[Body]:
@@ -176,7 +197,10 @@ def test_a_ball_rolls_down_stairs_into_a_band() -> None:
     the engines agree on where it ends up, not on each bounce.
     """
     bodies = stairs() + [Body(('sphere', 0.2), (0.3, 1.5 + 0.2, 0.0), velocity=(1.5, 0.0, 0.0))]
-    ends = [trace.last()[-1] for trace in (run_jolt(bodies, 480), run_omi(bodies, 480))]
+    ends = [
+        run_jolt(bodies, 480).last()[-1],
+        reference('stairs', lambda: run_omi(bodies, 480).last()[-1]),
+    ]
     for end in ends:
         assert 3.0 < end[0] < 12.0
         assert end[1] == pytest.approx(0.2, abs=0.01)
@@ -193,7 +217,8 @@ def test_a_body_falling_through_a_sensor_enters_and_leaves_within_a_tick() -> No
         Body(('box', (2.0, 1.0, 2.0)), (0.0, 5.0, 0.0), 'static', 0.0, sensor=True),
         Body(('sphere', 0.2), (0.0, 8.0, 0.0)),
     ]
-    jolt, omi = run_jolt(bodies, 180).triggers, run_omi(bodies, 180).triggers
+    jolt = run_jolt(bodies, 180).triggers
+    omi = reference('sensor/fall', lambda: run_omi(bodies, 180).triggers)
     assert [(p, a, b) for _, p, a, b in jolt] == [('enter', 0, 1), ('exit', 0, 1)]
     assert [(p, a, b) for _, p, a, b in omi] == [('enter', 0, 1), ('exit', 0, 1)]
     for (tj, *_), (to, *_) in zip(jolt, omi, strict=True):
@@ -208,10 +233,11 @@ def test_a_sensor_holds_a_body_asleep_inside_it() -> None:
         Body(('box', (4.0, 2.0, 4.0)), (0.0, 1.0, 0.0), 'static', 0.0, sensor=True),
         Body(('box', (1.0, 1.0, 1.0)), (0.0, 0.6, 0.0)),
     ]
-    jolt, omi = run_jolt(bodies, 600), run_omi(bodies, 600)
+    jolt = run_jolt(bodies, 600)
+    omi = reference('sensor/asleep', lambda: run_omi(bodies, 600).triggers)
     assert not jolt.awake[2]
-    for trace in (jolt, omi):
-        assert [(p, a, b) for _, p, a, b in trace.triggers] == [('enter', 1, 2)]
+    for triggers in (jolt.triggers, omi):
+        assert [(p, a, b) for _, p, a, b in triggers] == [('enter', 1, 2)]
 
 
 def test_a_kinematic_sensor_passes_over_a_static_body() -> None:
@@ -227,7 +253,7 @@ def test_a_kinematic_sensor_passes_over_a_static_body() -> None:
     ]
     jolt = run_jolt(bodies, 120, gravity=(0.0, 0.0, 0.0)).triggers
     assert [(p, a, b) for _, p, a, b in jolt] == [('enter', 1, 0), ('exit', 1, 0)]
-    omi = run_omi(bodies, 120).triggers
+    omi = reference('sensor/kinematic', lambda: run_omi(bodies, 120).triggers)
     assert len(omi) in (0, 2)
 
 
@@ -241,8 +267,8 @@ def test_a_continuous_bullet_does_not_pass_a_thin_wall() -> None:
     bullet = Body(('sphere', 0.05), (-2.0, 2.0, 0.0), velocity=(300.0, 0.0, 0.0), continuous=True)
     jolt = run_jolt([wall, bullet], 6, gravity=(0.0, 0.0, 0.0)).last()[1]
     assert jolt[0] < 0.0
-    omi = run_omi([wall, bullet], 6).last()[1]
-    assert omi[0] > 0.0
+    omi = reference('bullet', lambda: run_omi([wall, bullet], 6).last()[1, 0])
+    assert omi > 0.0
 
 
 def test_a_continuous_bullet_does_not_pass_a_mesh_wall() -> None:
@@ -277,10 +303,15 @@ def test_a_thousand_boxes_fill_a_container_to_the_same_depth() -> None:
     for p in rng.uniform((-4.7, 1.0, -4.7), (4.7, 16.0, 4.7), (1000, 3)):
         bodies.append(Body(('box', (0.5, 0.5, 0.5)), (float(p[0]), float(p[1]), float(p[2]))))
     jolt = run_jolt(bodies, 480, threads=4).last()[first:, 1]
-    omi = run_omi(bodies, 480).last()[first:, 1]
-    assert jolt.min() > 0.2 and omi.min() > 0.2
-    assert jolt.mean() == pytest.approx(omi.mean(), rel=0.03)
-    assert jolt.std() == pytest.approx(omi.std(), rel=0.10)
+
+    def pile() -> tuple[float, float, float]:
+        heights = run_omi(bodies, 480).last()[first:, 1]
+        return float(heights.min()), float(heights.mean()), float(heights.std())
+
+    lowest, mean, spread = reference('bin', pile)
+    assert jolt.min() > 0.2 and lowest > 0.2
+    assert jolt.mean() == pytest.approx(mean, rel=0.03)
+    assert jolt.std() == pytest.approx(spread, rel=0.10)
 
 
 def test_a_compound_comes_to_its_rest_pose() -> None:
@@ -295,9 +326,16 @@ def test_a_compound_comes_to_its_rest_pose() -> None:
     )
     tilt = (0.0, 0.0, math.sin(0.15), math.cos(0.15))
     bodies = [ground(0.8), Body(dumbbell, (0.0, 2.0, 0.0), mass=2.0, orientation=tilt)]
-    for trace in (run_jolt(bodies, 600), run_omi(bodies, 600)):
-        assert trace.last()[1, 1] == pytest.approx(0.5, abs=0.01)
+
+    def rest(trace: Trace) -> tuple[float, float]:
         q = trace.orientation[-1, 1]
         # The bar's axis is the body's x axis turned by q; level means no y part.
         x_axis_y = 2.0 * (q[0] * q[1] + q[3] * q[2])
-        assert abs(math.degrees(math.asin(np.clip(x_axis_y, -1, 1)))) < 1.0
+        return float(trace.last()[1, 1]), math.degrees(math.asin(np.clip(x_axis_y, -1, 1)))
+
+    for height, tilt_degrees in (
+        rest(run_jolt(bodies, 600)),
+        reference('dumbbell', lambda: rest(run_omi(bodies, 600))),
+    ):
+        assert height == pytest.approx(0.5, abs=0.01)
+        assert abs(tilt_degrees) < 1.0

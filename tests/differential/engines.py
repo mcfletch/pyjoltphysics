@@ -11,11 +11,14 @@ positions and orientations, and the trigger enters and exits by tick.
 from __future__ import annotations
 
 import dataclasses
+import importlib
+import json
+import os
+from collections.abc import Callable
+from pathlib import Path
 from typing import Any
 
 import numpy as np
-from omi_physics import model
-from omi_physics import world as omi
 
 from pyjoltphysics import BodyBatch, BodyFlag, MotionType, Shape, World, WorldSettings
 
@@ -131,6 +134,8 @@ def run_jolt(bodies: list[Body], ticks: int, threads: int = 1, **settings: Any) 
 
 
 def omi_shape(spec: Spec) -> Any:
+    from omi_physics import model  # noqa: PLC0415 omi_physics is optional: the recorded answers stand in
+
     kind = spec[0]
     if kind == 'box':
         return model.Shape.box(tuple(spec[1]))
@@ -152,6 +157,9 @@ def omi_shape(spec: Spec) -> Any:
 
 
 def run_omi(bodies: list[Body], ticks: int) -> Trace:
+    from omi_physics import model  # noqa: PLC0415 omi_physics is optional: the recorded answers stand in
+    from omi_physics import world as omi  # noqa: PLC0415 omi_physics is optional: the recorded answers stand in
+
     world = omi.PhysicsWorld(gravity=model.Gravity(gravity=G, direction=(0, -1, 0)), fixed_dt=DT)
     world.report_persist = False
     indices = []
@@ -197,6 +205,77 @@ def run_omi(bodies: list[Body], ticks: int) -> Trace:
         orientations.append(np.array([world.orientation[i] for i in indices], dtype=np.float64))
     awake = np.array([world.is_awake_mover(i) for i in indices])
     return Trace(np.array(positions), np.array(orientations), triggers, awake)
+
+
+# -- omi_physics' recorded answers ---------------------------------------------
+
+#: omi_physics' answers to the scenes of ``test_scenes.py``, by key, recorded from
+#: omi_physics 0.4 on 2026-10-31. omi_physics is deprecated and leaves the
+#: workspace with its engine; these numbers keep its answers as the reference
+#: the Jolt side is compared with once it is gone.
+GOLDEN = Path(__file__).with_name('omi_golden.json')
+#: Set to a path, a run writes the answers it computed there instead of checking them.
+RECORD = 'PYJOLTPHYSICS_RECORD_OMI'
+_recorded: dict[str, Any] = {}
+
+
+def have_omi() -> bool:
+    """Whether omi_physics can be imported."""
+    try:
+        importlib.import_module('omi_physics')
+    except ImportError:
+        return False
+    return True
+
+
+def reference(key: str, compute: Callable[[], Any]) -> Any:
+    """omi_physics' answer for ``key``: the recorded one, checked against a live run where
+    omi_physics is installed.
+
+    The live check holds the recording to the engine within 0.1% (and 0.1 mm), the
+    spread of one engine on two machines; trigger ticks and sets compare exactly.
+    """
+    recording = os.environ.get(RECORD)
+    if recording:
+        _recorded[key] = _plain(compute())
+        Path(recording).write_text(json.dumps(_recorded, indent=1, sort_keys=True) + '\n')
+        return _recorded[key]
+    if not _recorded:
+        _recorded.update(json.loads(GOLDEN.read_text()))
+    if key not in _recorded:
+        raise KeyError('no recorded omi_physics answer for %r; record with %s' % (key, RECORD))
+    recorded = _recorded[key]
+    if not have_omi():
+        return recorded
+    live = _plain(compute())
+    assert _close(live, recorded), (key, live, recorded)
+    return recorded
+
+
+def _close(live: Any, recorded: Any) -> bool:
+    """Whether a live answer is the recorded one: floats within 0.1% or 0.1 mm, the rest exactly."""
+    if isinstance(recorded, list):
+        return (
+            isinstance(live, list)
+            and len(live) == len(recorded)
+            and all(_close(a, b) for a, b in zip(live, recorded, strict=True))
+        )
+    if isinstance(recorded, float):
+        return abs(float(live) - recorded) <= max(1e-4, 1e-3 * abs(recorded))
+    return bool(live == recorded)
+
+
+def _plain(value: Any) -> Any:
+    """``value`` as JSON holds it: floats, ints, strings and lists of them."""
+    if isinstance(value, (list, tuple, np.ndarray)):
+        return [_plain(item) for item in value]
+    if isinstance(value, (bool, np.bool_)):
+        return bool(value)
+    if isinstance(value, (int, np.integer)):
+        return int(value)
+    if isinstance(value, (float, np.floating)):
+        return float(value)
+    return value
 
 
 # -- scenery -------------------------------------------------------------------
