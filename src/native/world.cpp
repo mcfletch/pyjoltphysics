@@ -30,6 +30,7 @@ double seconds(std::chrono::steady_clock::duration span) {
 WorldCore::WorldCore(const WorldSettings &settings)
     : settings_(settings), dt_(1.0 / settings.tick_hz), ring_(settings.event_capacity) {
     register_jolt();
+    force_optimize_after_ = std::max(kOptimizeAfterAdded, size_t(settings.max_bodies) / 8);
     if (!JPH::VerifyJoltVersionID())
         throw std::runtime_error("Jolt was built with options that differ from the binding's");
     temp_ = std::make_unique<JPH::TempAllocatorImplWithMallocFallback>(
@@ -382,10 +383,15 @@ bool WorldCore::busy() const {
 }
 
 void WorldCore::optimize_if_due() {
-    if (statics_since_optimize_ < kOptimizeAfterStatics)
+    if (added_since_optimize_ < kOptimizeAfterAdded)
         return;
-    statics_since_optimize_ = 0;
     std::unique_lock<WorldLock> exclusive(world_lock_);
+    optimize_broadphase();
+}
+
+// The caller holds world_lock_ exclusively.
+void WorldCore::optimize_broadphase() {
+    added_since_optimize_ = 0;
     system_.OptimizeBroadPhase();
     ++optimizations_;
 }
@@ -410,7 +416,7 @@ void WorldCore::loop() {
                     wake_.wait(guard);
                     continue;
                 }
-                if (statics_since_optimize_ >= kOptimizeAfterStatics &&
+                if (added_since_optimize_ >= kOptimizeAfterAdded &&
                     (mode_ == Mode::Lockstep ? wanted_ == 0 : Clock::now() < next || !busy())) {
                     working_ = true;
                     guard.unlock();
@@ -696,6 +702,9 @@ bool WorldCore::apply_due(uint64_t index, std::vector<Batch> &due) {
     queue_.take_due(index, due);
     for (Batch &batch : due) {
         // A batch that throws (std::bad_alloc) is rejected and the world goes on.
+        // Each body added and its batch count toward the next optimisation.
+        const uint32_t adding = uids_wanted(batch.command);
+        added_since_optimize_ += adding ? adding + 1 : 0;
         try {
             apply(batch, index);
         } catch (const std::exception &error) {
@@ -704,6 +713,9 @@ bool WorldCore::apply_due(uint64_t index, std::vector<Batch> &due) {
             last_rejection_ = error.what();
         }
         note_applied(batch.seq);
+        // The caller holds world_lock_ exclusively.
+        if (added_since_optimize_ >= force_optimize_after_)
+            optimize_broadphase();
     }
     characters_->flush_events(tick_events_);
     if (due.empty())
@@ -1042,8 +1054,9 @@ WorldStats WorldCore::stats() const {
     out.vehicles = applied_vehicles_.load();
     out.ragdolls = applied_ragdolls_.load();
     out.soft_bodies = applied_soft_.load();
-    out.queued_bodies =
-        size_t(std::max<int64_t>(0, reserved_bodies_.load())) - out.bodies - out.characters;
+    // The counters change apart, so the difference is clamped at zero.
+    out.queued_bodies = size_t(std::max<int64_t>(
+        0, reserved_bodies() - int64_t(out.bodies) - int64_t(out.characters)));
     out.queries = queries_.load();
     out.query_wait_ms = out.queries ? 1e-6 * double(query_wait_ns_.load()) / double(out.queries) : 0.0;
     out.query_wait_max_ms = 1e-6 * double(query_wait_max_ns_.load());

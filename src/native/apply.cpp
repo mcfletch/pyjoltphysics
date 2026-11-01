@@ -74,7 +74,6 @@ void WorldCore::apply(AddBodies &add, uint64_t) {
     std::vector<JPH::BodyID> made;
     made.reserve(count);
     std::vector<JPH::BodyID> sensors;
-    size_t statics = 0;
     // Consecutive rows usually share their collision key. Each body holds one
     // use of its layer; a row with no layer to be had is rejected.
     LayerKey last;
@@ -150,8 +149,6 @@ void WorldCore::apply(AddBodies &add, uint64_t) {
             fields_.drag[body->GetID().GetIndex()] = add.drag[i];
         if (settings.mIsSensor)
             sensors.push_back(body->GetID());
-        if (!moving)
-            ++statics;
     }
     if (made.empty())
         return;
@@ -160,7 +157,6 @@ void WorldCore::apply(AddBodies &add, uint64_t) {
     bodies.AddBodiesFinalize(made.data(), int(made.size()), state, JPH::EActivation::Activate);
     collector_.quiet = false;
     applied_bodies_ += made.size();
-    statics_since_optimize_ += statics;
     for (const JPH::BodyID &id : sensors)
         wake_under_sensor(id);
 }

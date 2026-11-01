@@ -277,3 +277,22 @@ def test_settings_of_a_world_thread_are_bounded() -> None:
         WorldSettings(temp_allocator_mb=4096)
     with pytest.raises(ValueError, match='gravity'):
         WorldSettings(gravity=(0.0, -1e300, 0.0))
+
+
+def test_queued_bodies_stay_within_max_bodies_while_the_world_removes() -> None:
+    """stats() read while the world thread applies removals never counts more queued bodies than fit."""
+    world = World(WorldSettings(threads=1, max_bodies=4096, tick_hz=1000.0))
+    world.start()
+    try:
+        deadline = time.monotonic() + 1.5 * sanitizer_slowdown()
+        most = 0
+        while time.monotonic() < deadline:
+            stats = world.stats()
+            if int(stats['bodies']) + int(stats['queued_bodies']) < 1024:
+                uids, _ = world.add_bodies(BodyBatch.spheres([(i * 0.5, 0.0, 0.0) for i in range(64)]))
+                world.remove_bodies(uids)
+            for _ in range(20):
+                most = max(most, int(world.stats()['queued_bodies']))
+        assert most <= 4096
+    finally:
+        world.stop()

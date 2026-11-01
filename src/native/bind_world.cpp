@@ -2282,6 +2282,7 @@ void bind_world(nb::module_ &m) {
         .def_prop_ro("lockstep", [](const World &w) { return w.core().lockstep(); })
         .def_prop_ro("forked", [](const World &w) { return w.core().forked(); })
         .def_prop_ro("submitted_seq", [](const World &w) { return w.core().submitted_seq(); })
+        .def_prop_ro("reserved_bodies", [](const World &w) { return w.core().reserved_bodies(); })
         .def_prop_ro("on_world_thread", [](const World &w) { return w.core().on_world_thread(); })
         .def("stats", &stats, nb::sig("def stats(self) -> dict[str, int | float | bool]"))
         .def("reset_stats", [](World &w) { w.core().reset_stats(); });

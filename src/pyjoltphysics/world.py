@@ -479,6 +479,15 @@ class World:
         """The sequence number of the last batch submitted."""
         return self._native.submitted_seq
 
+    @property
+    def reserved_bodies(self) -> int:
+        """The bodies counted against ``max_bodies``: those in the world and those submitted.
+
+        A body counts from the submission that adds it until the tick that
+        applies its removal, so a removal makes room once it is applied.
+        """
+        return self._native.reserved_bodies
+
     def stats(self) -> dict[str, int | float | bool]:
         """Return counters and mean milliseconds a tick since :meth:`reset_stats`, by name."""
         return self._native.stats()

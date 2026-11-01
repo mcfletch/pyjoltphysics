@@ -39,6 +39,7 @@
 #include <Jolt/Core/TempAllocator.h>
 #include <Jolt/Physics/PhysicsSystem.h>
 
+#include <algorithm>
 #include <atomic>
 #include <chrono>
 #include <condition_variable>
@@ -164,6 +165,7 @@ public:
     uint64_t submit(Command &&command, uint64_t at_tick, Uid *first_uid = nullptr, JointId *first_joint = nullptr,
                     VehicleId *vehicle = nullptr, RagdollId *ragdoll = nullptr);
     uint64_t submitted_seq() const { return queue_.last_seq(); }
+    int64_t reserved_bodies() const { return std::max<int64_t>(0, reserved_bodies_.load()); }
 
     // -- the thread: callers release the GIL ---------------------------------
     void start();
@@ -264,7 +266,15 @@ private:
     enum class Mode { Free, Lockstep };
     using Clock = std::chrono::steady_clock;
     static constexpr uint32_t kNoRow = 0xffffffffu;
-    static constexpr size_t kOptimizeAfterStatics = 256;
+    // Jolt rebuilds a broad-phase tree at a step only while the tree holds a
+    // body. Adding bodies makes tree nodes, and bodies added to a layer that
+    // is empty again by the step leave those nodes made until the broad phase
+    // is optimised; Jolt aborts the process when its nodes run out. A count of
+    // what has been added since the last optimisation therefore asks for one:
+    // between ticks after kOptimizeAfterAdded, and inside the tick after
+    // force_optimize_after_, which keeps a world with no time between ticks
+    // inside the node budget max_bodies sets.
+    static constexpr size_t kOptimizeAfterAdded = 256;
     static constexpr std::chrono::seconds kForkWait{5};
 
     struct Row {
@@ -387,6 +397,7 @@ private:
     // Rebuilds the broad phase's trees after a large add of static bodies, once
     // the world thread has a moment with no tick due.
     void optimize_if_due();
+    void optimize_broadphase();
     const Row *find(Uid uid) const;
     void bind_row(Uid uid, const JPH::BodyID &id);
     void unbind_row(Uid uid);
@@ -420,7 +431,8 @@ private:
     std::vector<uint32_t> row_of_index_;  // by BodyID index
     std::atomic<int64_t> reserved_bodies_{0};
     std::atomic<size_t> applied_bodies_{0};
-    size_t statics_since_optimize_ = 0;
+    size_t added_since_optimize_ = 0;
+    size_t force_optimize_after_ = kOptimizeAfterAdded;
     std::atomic<uint64_t> optimizations_{0};
 
     CommandQueue queue_;

@@ -7,6 +7,7 @@ import pytest
 
 from pyjoltphysics import BodyBatch, BodyFlag, MotionType, ShapeKind
 from pyjoltphysics.testing import MakeWorld, floor, grid
+from test_lifecycle import run_python
 
 G = 9.81
 
@@ -224,6 +225,39 @@ def test_stats_count_applied_bodies_apart_from_queued_ones(make_world: MakeWorld
     world.run_ticks(5)
     stats = world.stats()
     assert (stats['bodies'], stats['queued_bodies']) == (10, 0)
+
+
+def test_reserved_bodies_count_a_removal_until_it_is_applied(make_world: MakeWorld) -> None:
+    world = make_world(threads=1)
+    assert world.reserved_bodies == 0
+    uids, _ = world.add_bodies(BodyBatch.spheres(grid(5, spacing=3.0)))
+    assert world.reserved_bodies == 5
+    world.run_ticks(1)
+    world.remove_bodies(uids[:3])
+    assert world.reserved_bodies == 5
+    world.run_ticks(1)
+    assert world.reserved_bodies == 2
+    assert world.stats()['bodies'] == 2
+
+
+@pytest.mark.parametrize('motion', [MotionType.DYNAMIC, MotionType.KINEMATIC, MotionType.STATIC])
+def test_bodies_added_and_removed_every_tick_stay_within_the_broad_phase(motion: MotionType) -> None:
+    """Bodies added and removed before each step leave a layer empty; its tree is rebuilt anyway."""
+    result = run_python(
+        f"""
+        from pyjoltphysics import BodyBatch, MotionType, World, WorldSettings
+        world = World(WorldSettings(threads=1, max_bodies=1024))
+        for _ in range(400):
+            for _ in range(16):
+                uids, _ = world.add_bodies(BodyBatch.spheres(
+                    [(j * 0.5, 0.0, 0.0) for j in range(4)], motion=MotionType({int(motion)})))
+                world.remove_bodies(uids)
+            world.run_ticks(1)
+        print(world.stats()['bodies'])
+        """
+    )
+    assert result.returncode == 0, result.stderr[-2000:]
+    assert result.stdout.split() == ['0']
 
 
 def test_every_primitive_shape_comes_to_rest_on_a_plane(make_world: MakeWorld) -> None:

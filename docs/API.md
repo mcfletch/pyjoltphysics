@@ -60,10 +60,16 @@ call that a waiting batch, a due `at_tick` or an awake body would act on
 steps every tick, and a woken world plays out bitwise as one stepped through
 the quiet ticks. `stats()['quiet_ticks']` counts the ticks counted this way.
 
-After a tick that adds 256 or more static bodies, the world thread rebuilds
-the broad phase's trees (`PhysicsSystem::OptimizeBroadPhase`) once, the next
-time it has no tick due: before waiting in lockstep, or in the time before
-the next scheduled tick when free-running. `stats()['broadphase_optimizations']`
+Once 256 or more bodies of any kind have been added since the last rebuild
+(each batch counting one more), the world thread rebuilds the broad phase's
+trees (`PhysicsSystem::OptimizeBroadPhase`) once, the next time it has no
+tick due: before waiting in lockstep, or in the time before the next
+scheduled tick when free-running. A world that has no such time rebuilds
+them while it applies batches, once the count reaches an eighth of
+`max_bodies`. Jolt rebuilds a tree at a step only while the tree holds a
+body, so bodies added to a layer that is empty again by the step keep the
+tree nodes they made until a rebuild, and Jolt ends the process when its
+nodes, sized from `max_bodies`, run out. `stats()['broadphase_optimizations']`
 counts the rebuilds. A free-running world
 that falls more than `max_catch_up` seconds behind its schedule drops the
 ticks it is behind by (`stats()['dropped_ticks']`), so simulated time slows.
@@ -111,6 +117,7 @@ A frozen dataclass; every field has a default.
 | `error` | the exception that stopped the world (a callback's, or a `RuntimeError` naming what failed on the world thread), or None |
 | `last_rejection` | why the world thread could not apply the last batch that raised while it applied it (out of memory), or None; the batch is counted in `rejected` and the world steps on |
 | `submitted_seq` | the sequence number of the last batch submitted |
+| `reserved_bodies` | the bodies counted against `max_bodies`: each from the submission that adds it to the tick that applies its removal |
 | `stats()` | counters (`ticks`, `dropped_ticks`, `events_dropped`, `events_held` in the ring until the next drain, `rejected`, `pool`, `bodies` in the world, `queued_bodies` submitted and not yet applied, `shapes` registered, `broadphase_optimizations`, `idle`, `running`) `characters`, `vehicles`, `ragdolls`, `soft_bodies`, `queries` that waited for the world lock, and mean milliseconds a tick since `reset_stats()` (`apply_ms`, `characters_ms` (kinematic targets, characters, vehicles, ragdolls and soft bodies before the step), `ragdolls_ms` (the ragdolls' pose targets and motors before the step, a part of `characters_ms`), `soft_bodies_ms` (the soft bodies' pins and wind before the step and their vertex copies after it), `step_ms`, `events_ms`, `publish_ms`, `callbacks_ms`, `tick_ms`), `quiet_ticks` counted without stepping since `reset_stats()`, with `query_wait_ms` and `query_wait_max_ms`, the mean and longest wait of a query for the world lock |
 
 ## Commands
