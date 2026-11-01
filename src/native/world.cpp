@@ -487,7 +487,8 @@ void WorldCore::loop() {
 // The thread detaches whatever the body throws: a C++ exception (a failed
 // cast, an allocation) stops the world as a Python one does.
 template <typename Body> bool WorldCore::call_python(Body &&body) {
-    if (!python_.attach())
+    PythonCall call(*this);
+    if (!call.admitted() || !python_.attach())
         return true;
     bool ok = true;
     try {
@@ -560,6 +561,43 @@ int WorldCore::traverse(visitproc visit, void *arg) {
     if (error_.is_valid())
         Py_VISIT(error_.ptr());
     return 0;
+}
+
+WorldCore::PythonCall::PythonCall(WorldCore &world) : world_(world) {
+    std::lock_guard<std::mutex> guard(world_.calls_lock_);
+    admitted_ = !world_.retired_;
+    if (admitted_)
+        ++world_.calls_;
+}
+
+WorldCore::PythonCall::~PythonCall() {
+    if (!admitted_)
+        return;
+    std::lock_guard<std::mutex> guard(world_.calls_lock_);
+    if (--world_.calls_ == 0)
+        world_.calls_done_.notify_all();
+}
+
+// The cyclic collector of a free-threaded build finds a World and its
+// callables unreachable with every thread stopped, then lets the threads run
+// before it finalizes and clears them. The world thread reads the callables
+// through the core, which the collector cannot see, so it would call a
+// function the collector had cleared. The World's finalizer runs before any
+// of them is cleared: from then on no call starts, and the calls already
+// running finish first.
+void WorldCore::retire_python() {
+    // A call on this thread (the collection runs inside it) is not waited for.
+    const int own = in_callback() ? 1 : 0;
+    {
+        std::lock_guard<std::mutex> guard(calls_lock_);
+        retired_ = true;
+    }
+    {
+        nb::gil_scoped_release release;
+        std::unique_lock<std::mutex> guard(calls_lock_);
+        calls_done_.wait(guard, [&] { return calls_ <= own; });
+    }
+    clear_python();
 }
 
 void WorldCore::clear_python() {
@@ -877,7 +915,8 @@ bool WorldCore::solve_pair(const JPH::Body &body1, const JPH::Body &body2, JPH::
         normal = -normal;
     }
     bool solve = true;
-    if (!python_available())
+    PythonCall call(*this);
+    if (!call.admitted() || !python_available())
         return true;
     PyThreadState *state = nullptr;
     const bool world_thread = on_world_thread();

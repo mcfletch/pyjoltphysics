@@ -7,6 +7,7 @@
 
 from __future__ import annotations
 
+import os
 from collections.abc import Callable
 from typing import Any, Protocol, TypeVar
 
@@ -24,6 +25,7 @@ __all__ = [
     'grid',
     'latest',
     'pose_digest',
+    'sanitizer_slowdown',
     'vehicle_digest',
 ]
 
@@ -38,6 +40,15 @@ class Digest(Protocol):
 
 
 D = TypeVar('D', bound=Digest)
+
+
+def sanitizer_slowdown() -> float:
+    """Return 10 where the sanitizer runtimes are preloaded (``tools/asan.sh``), 1 elsewhere.
+
+    A bound on time or on a rate stretches by it on the sanitizer build,
+    which runs several times slower.
+    """
+    return 10.0 if 'libasan' in os.environ.get('LD_PRELOAD', '') else 1.0
 
 
 def latest(world: World) -> Snapshot:

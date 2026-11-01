@@ -27,8 +27,6 @@ export LD_PRELOAD="$runtimes"
 export ASAN_OPTIONS="detect_leaks=0:abort_on_error=1:symbolize=1"
 export UBSAN_OPTIONS="print_stacktrace=1:halt_on_error=1"
 export PYTHONPATH="$package"
-# Tests that bound a wait stretch it on this build, which runs several times slower.
-export PYJOLTPHYSICS_SANITIZED=1
 # An installed pyjoltphysics (an editable install's import hook among them)
 # would be tested in place of the sanitizer build.
 "$python" -c "import sys, pyjoltphysics._native as m; sys.exit(0 if m.__file__.startswith('$package') else 'pyjoltphysics resolves to ' + m.__file__)"

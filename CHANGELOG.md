@@ -65,8 +65,9 @@
 - `save_state`, `flush`, `wait_tick` and `run_ticks` from the contact filter raise `RuntimeError`; `stop` from it ends the thread after the tick.
 - `start()` while `run_ticks` waits makes `run_ticks` raise `WorldStopped`; `stop()` racing `run_ticks` or `start` on another thread joins the thread it stopped.
 - A dropped `World` is freed at once (its `MaterialTable` holds it weakly); a world dropped or collected from its own callback, or while the interpreter exits, ends its thread after the tick, and keeps no Python object once dropped.
-- Values stored as 32-bit floats raise `ValueError` where they overflow one; `WorldSettings.tick_hz` is 1 to 10000 and `temp_allocator_mb` 0 to 4095; soft body `iterations` are 1 to 1000 (`softbodies.MAX_ITERATIONS`); uids, groups, masks, filters and material indices outside their integer types raise `ValueError`.
+- Values stored as 32-bit floats raise `ValueError` where they overflow one; `WorldSettings.tick_hz` is 1 to 10000, `threads` 1 to 256 and `temp_allocator_mb` 0 to 4095; soft body `iterations` are 1 to 1000 (`softbodies.MAX_ITERATIONS`); uids, groups, masks, filters and material indices outside their integer types raise `ValueError`.
 - The sanitizer build (`tox -e asan`) adds `-fsanitize=float-cast-overflow`.
+- A `World` in a garbage cycle stops calling its callbacks when the collector finalizes it, before any callable is cleared; the free-threaded collector clears with the other threads running.
 
 - `jolt_version()`, `build_options()` and `selftest()` over the compiled module `pyjoltphysics._native`.
 - Jolt Physics v5.6.0 (commit e77f1755), double precision, cross-platform deterministic, SSE4.2 floor on x86-64.

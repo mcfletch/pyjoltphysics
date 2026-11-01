@@ -178,8 +178,22 @@ int world_clear(PyObject *self) {
     return 0;
 }
 
+// Runs before the collector clears any object of a garbage cycle holding the World.
+void world_finalize(PyObject *self) {
+    if (!nb::inst_ready(self))
+        return;
+    World *world = nb::inst_ptr<World>(self);
+    if (!world->core_ || world->core_->forked())
+        return;
+    PyObject *type, *value, *traceback;
+    PyErr_Fetch(&type, &value, &traceback);
+    world->core_->retire_python();
+    PyErr_Restore(type, value, traceback);
+}
+
 PyType_Slot world_slots[] = {{Py_tp_traverse, reinterpret_cast<void *>(world_traverse)},
                              {Py_tp_clear, reinterpret_cast<void *>(world_clear)},
+                             {Py_tp_finalize, reinterpret_cast<void *>(world_finalize)},
                              {0, nullptr}};
 
 // The shape of each row: a registered shape by id, or a primitive by kind and
@@ -1712,8 +1726,8 @@ void bind_world(nb::module_ &m) {
                             "not negative");
                 if (!(std::isfinite(max_catch_up) && max_catch_up >= 0.0))
                     throw std::invalid_argument("max_catch_up is zero or positive");
-                if (threads < 1)
-                    throw std::invalid_argument("threads is at least 1");
+                if (threads < 1 || threads > 256)
+                    throw std::invalid_argument("threads is from 1 to 256");
                 if (max_bodies < 1 || collision_steps < 1 || event_capacity < 1)
                     throw std::invalid_argument(
                         "max_bodies, collision_steps and event_capacity are at least 1");

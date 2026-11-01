@@ -11,6 +11,8 @@ __all__ = ['WorldSettings']
 #: The tick rates a world steps at, Hz.
 MIN_TICK_HZ = 1.0
 MAX_TICK_HZ = 10000.0
+#: The most job threads a world starts, the world thread included.
+MAX_THREADS = 256
 #: Jolt sizes its scratch allocator in a 32-bit byte count.
 MAX_TEMP_ALLOCATOR_MB = 4095
 _FLOAT_MAX = 3.4028234663852886e38
@@ -21,7 +23,7 @@ class WorldSettings:
     """The fixed settings of one :class:`~pyjoltphysics.World`.
 
     Units are SI: seconds, metres, kilograms. ``threads`` counts Jolt's job
-    threads including the world thread; 1 steps on the world thread alone.
+    threads including the world thread, 1 to 256; 1 steps on the world thread alone.
     """
 
     #: Ticks a second, each one step of ``1 / tick_hz`` seconds; 1 to 10000.
@@ -71,8 +73,8 @@ class WorldSettings:
                 'temp_allocator_mb is from 0 to %d, not %r'
                 % (MAX_TEMP_ALLOCATOR_MB, self.temp_allocator_mb)
             )
-        if self.threads < 1:
-            raise ValueError('threads is at least 1, not %r' % (self.threads,))
+        if not 1 <= self.threads <= MAX_THREADS:
+            raise ValueError('threads is from 1 to %d, not %r' % (MAX_THREADS, self.threads))
         if len(self.gravity) != 3:
             raise ValueError('gravity has three components')
         if not all(math.isfinite(g) and abs(g) <= _FLOAT_MAX for g in self.gravity):

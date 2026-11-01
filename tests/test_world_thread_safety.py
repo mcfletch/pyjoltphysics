@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import gc
-import os
 import threading
 import time
 import weakref
@@ -13,12 +12,7 @@ import pytest
 from test_lifecycle import run_python
 
 from pyjoltphysics import BodyBatch, BodyFlag, World, WorldSettings
-from pyjoltphysics.testing import MakeWorld, floor
-
-
-def slow() -> float:
-    """Return how much a bound on waiting stretches: 4 on a sanitizer build, which runs slower."""
-    return 4.0 if os.environ.get('PYJOLTPHYSICS_SANITIZED') else 1.0
+from pyjoltphysics.testing import MakeWorld, floor, sanitizer_slowdown
 
 
 def test_a_dropped_world_is_freed_at_once() -> None:
@@ -72,10 +66,12 @@ def test_a_world_collected_on_its_own_thread_while_a_callback_raises() -> None:
         gc.collect(); time.sleep(0.2)
         print('done')
         """,
-        timeout=120 * slow(),
+        timeout=120 * sanitizer_slowdown(),
     )
     assert result.returncode == 0, result.stderr[-3000:]
     assert result.stdout.strip().endswith('done')
+    # A callable the collector has cleared loses its defaults; none is called.
+    assert 'missing 1 required positional argument' not in result.stderr
 
 
 @pytest.mark.parametrize('drops', [1, 3])
@@ -98,7 +94,7 @@ def test_a_world_dropped_while_its_callback_sleeps_then_raises(drops: int) -> No
             del w, late
         print('survived')
         """,
-        timeout=10 * slow(),
+        timeout=10 * sanitizer_slowdown(),
     )
     assert result.returncode == 0, result.stderr[-3000:]
     assert 'survived' in result.stdout
@@ -118,7 +114,7 @@ def test_interpreter_exit_while_a_callback_raises() -> None:
         time.sleep(0.05)
         print('script ends')
         """,
-        timeout=10 * slow(),
+        timeout=10 * sanitizer_slowdown(),
     )
     assert result.returncode == 0, result.stderr[-3000:]
 
@@ -147,7 +143,7 @@ def test_stop_racing_run_ticks_never_deadlocks() -> None:
         w.run_ticks(3)
         print('returned', w.tick)
         """,
-        timeout=120 * slow(),
+        timeout=120 * sanitizer_slowdown(),
     )
     assert result.returncode == 0, result.stderr[-3000:]
     assert 'returned' in result.stdout
@@ -225,7 +221,7 @@ def test_blocking_calls_from_the_contact_filter_raise(make_world: MakeWorld, nam
     world.set_contact_filter(contact_filter)
     started = time.monotonic()
     world.run_ticks(3)
-    assert time.monotonic() - started < 20 * slow()
+    assert time.monotonic() - started < 20 * sanitizer_slowdown()
     assert raised and all('contact filter' in message for message in raised)
     assert world.error is None
 

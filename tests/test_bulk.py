@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import os
 import time
 
 import numpy as np
@@ -10,11 +9,7 @@ import pytest
 
 from pyjoltphysics import BodyBatch, MotionType, Shape, World
 from pyjoltphysics.testing import MakeWorld, floor, grid
-
-
-def slowdown() -> float:
-    """Return 10 under tools/asan.sh, which preloads the sanitizer runtimes, and 1 elsewhere."""
-    return 10.0 if 'libasan' in os.environ.get('LD_PRELOAD', '') else 1.0
+from pyjoltphysics.testing import sanitizer_slowdown as slowdown
 
 
 def optimizations_reach(world: World, count: int, timeout: float = 5.0) -> int:

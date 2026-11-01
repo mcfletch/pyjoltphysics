@@ -81,7 +81,7 @@ A frozen dataclass; every field has a default.
 | `tick_hz` | 120.0 | ticks a second, 1 to 10000 |
 | `max_catch_up` | 0.1 | seconds behind schedule before a free-running world drops ticks |
 | `gravity` | (0, -9.81, 0) | m/s2, each finite as a 32-bit float |
-| `threads` | 4 | Jolt job threads, the world thread included; 1 steps on the world thread alone |
+| `threads` | 4 | Jolt job threads, the world thread included, 1 to 256; 1 steps on the world thread alone |
 | `max_bodies` | 65536 | bodies the world holds; an add batch past it raises `ValueError` |
 | `max_body_pairs`, `max_contact_constraints` | 65536 | Jolt's pair and contact capacities |
 | `event_capacity` | 65536 | event records held for `drain_events` |
@@ -1157,7 +1157,9 @@ sets it to 1 ms while a physics-thread callback is registered.
 
 A world's callbacks may refer to the world: the world type takes part in
 Python's cyclic garbage collection, so a world and its callbacks are
-collected together.
+collected together. When the collector finds such a cycle, the world's
+finalizer runs first: no callback starts after it, and a callback running on
+another thread returns before the collector clears anything.
 
 ## Saving and restoring
 

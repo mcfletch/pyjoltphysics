@@ -238,6 +238,9 @@ public:
     // Drops every Python object the world holds; from then on a callback's
     // exception is logged and not kept. The caller is attached.
     void clear_python();
+    // clear_python for a World the collector is about to clear: no callback
+    // starts after it, and those running on other threads have returned.
+    void retire_python();
     // The message of the last batch the world could not apply because applying
     // it threw; empty when none has.
     std::string last_rejection() const;
@@ -277,6 +280,19 @@ private:
     bool run_python_before(uint64_t index);
     bool run_python_after(uint64_t tick);
     template <typename Body> bool call_python(Body &&body);
+    // One callback call, counted while it runs; not admitted once the World is retired.
+    class PythonCall {
+    public:
+        explicit PythonCall(WorldCore &world);
+        ~PythonCall();
+        PythonCall(const PythonCall &) = delete;
+        PythonCall &operator=(const PythonCall &) = delete;
+        bool admitted() const { return admitted_; }
+
+    private:
+        WorldCore &world_;
+        bool admitted_ = false;
+    };
     void fail(nb::python_error &error);
     // The world thread failed outside Python; the world stops with `message`.
     void fail_native(const std::string &message);
@@ -446,6 +462,10 @@ private:
     mutable std::mutex error_lock_;
     nb::object error_;
     bool python_cleared_ = false;  // under error_lock_
+    std::mutex calls_lock_;
+    std::condition_variable calls_done_;
+    int calls_ = 0;          // callback calls running, under calls_lock_
+    bool retired_ = false;   // under calls_lock_
     std::string native_error_;     // under error_lock_
     std::string last_rejection_;   // under error_lock_
     std::atomic<bool> failed_{false};
