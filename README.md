@@ -26,7 +26,7 @@ arrays and publishes each tick's poses as read-only NumPy views.
 A `World` steps on its own thread at `tick_hz` (120 by default) or in lockstep
 with `run_ticks(n)`. Commands are batches of arrays applied at the start of
 the next tick; each tick publishes a snapshot of every body's pose and
-velocity into a pool of reference-counted buffers, and appends one 64-byte
+velocity into a pool of reference-counted buffers, and appends one 72-byte
 record per contact begin, end and (on request) persist to an event ring.
 Callbacks run on the world thread only when registered. Shapes are boxes,
 spheres, capsules, cylinders, static planes, convex hulls, triangle meshes,
@@ -99,7 +99,7 @@ Every wheel is built with the same Jolt options.
 |---|---|---|
 | `double_precision` | `True` | `JPH_DOUBLE_PRECISION`: positions are 64-bit floats, where 32-bit ones resolve 0.98 mm between 8 and 16 km from the origin |
 | `cross_platform_deterministic` | `True` | `JPH_CROSS_PLATFORM_DETERMINISTIC`: the same inputs step to the same bits on x86-64 and arm64 |
-| `simd_level` | `'sse4.2'` on x86-64, `'neon'` on arm64 | x86-64 compiles SSE4.2 and POPCNT (`-march=x86-64-v2`, which every x86-64 CPU sold since 2009 has), with AVX, AVX2, F16C, FMA, LZCNT and TZCNT off |
+| `simd_level` | `'sse4.2'` on x86-64, `'neon'` on arm64 | x86-64 compiles for `-march=x86-64-v2` (SSE3, SSSE3, SSE4.1, SSE4.2, POPCNT, CMPXCHG16B, LAHF/SAHF), with AVX, AVX2, F16C, FMA, LZCNT and TZCNT off. Intel Nehalem (2008) and later Core and Xeon, Intel Silvermont (2013) and later Atom, and AMD Bulldozer (2011), Jaguar (2013) and later have it. Intel Core 2, Bonnell and Saltwell Atom, and AMD K10 (Phenom II, Athlon II) and Bobcat lack it, and the module does not run on them |
 | `free_threaded` | `True` in the cp313t and cp314t wheels | nanobind's `FREE_THREADED`: importing the module leaves the GIL off |
 | `debug` | `False` | no `JPH_ENABLE_ASSERTS`, `NDEBUG` defined, no debug renderer or profiler |
 | `compiler` | such as `'gcc 14.2.1'` | the compiler that built the module |

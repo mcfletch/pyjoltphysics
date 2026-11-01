@@ -32,6 +32,7 @@
 #include "shapes.h"
 #include "snapshot.h"
 #include "softbodies.h"
+#include "threads.h"
 #include "vehicles.h"
 
 #include <Jolt/Core/JobSystem.h>
@@ -246,6 +247,12 @@ public:
     std::string last_rejection() const;
 
     // -- fork ----------------------------------------------------------------
+    // Before a fork: waits until the world thread is between ticks and keeps
+    // it there, holding the control lock, until release_after_fork in the
+    // parent and in the child. Nothing waits for a world whose callback is the
+    // caller.
+    void hold_for_fork();
+    void release_after_fork(bool parent);
     void mark_forked();
     bool forked() const { return forked_.load(); }
     void check() const {
@@ -258,6 +265,7 @@ private:
     using Clock = std::chrono::steady_clock;
     static constexpr uint32_t kNoRow = 0xffffffffu;
     static constexpr size_t kOptimizeAfterStatics = 256;
+    static constexpr std::chrono::seconds kForkWait{5};
 
     struct Row {
         Uid uid;
@@ -268,6 +276,8 @@ private:
     static constexpr uint64_t kQuietAfter = 2;
 
     void loop();
+    // Under control_: the world thread is about to wait or end, outside any tick.
+    void park();
     bool busy() const;
     bool tick_once();
     // Whether nothing in the world moves or acts at a tick: no awake body, character,
@@ -487,13 +497,20 @@ private:
     mutable std::mutex control_;
     std::condition_variable wake_;
     std::condition_variable done_;
+    // Notified when the world thread stops working and waits under control_.
+    std::condition_variable parked_;
     std::mutex join_lock_;
-    std::thread thread_;
+    Thread thread_;
     std::atomic<std::thread::id> thread_id_{};
     Mode mode_ = Mode::Lockstep;
     bool stopping_ = false;
     bool running_ = false;
     bool idle_ = false;
+    // True while the world thread runs outside control_: a tick, a broad
+    // phase optimisation, its start and its end.
+    bool working_ = false;
+    bool fork_wanted_ = false;  // a fork waits for the thread to park; it stays parked
+    bool fork_held_ = false;    // control_ is locked by hold_for_fork
     uint64_t wanted_ = 0;
     uint64_t cuts_ = 0;  // times start() ended a lockstep wait, under control_
     std::atomic<bool> forked_{false};

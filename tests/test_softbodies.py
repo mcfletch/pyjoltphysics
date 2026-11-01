@@ -327,14 +327,20 @@ def test_a_fine_cloth_dropped_at_60_hz_stays_whole(make_world: MakeWorld, side: 
     # Without bend constraints, or with too few iterations for its edges, Jolt's
     # solver tears a cloth of edges this short apart within 0.6 s at 60 Hz.
     world = make_world(tick_hz=60.0, threads=1)
+    world.add_bodies(floor())
     world.add_bodies(BodyBatch.spheres([(0.0, 0.6, 0.0)], radius=0.6, motion=MotionType.STATIC))
     cloth = SoftBodySettings.cloth(2.0, 2.0, columns=side, rows=side, mass=1.0, vertex_radius=0.01)
     assert cloth.iterations == iterations_for(2.0 / (side - 1))
     body = world.add_soft_body(cloth, position=(0.0, 1.6, 0.0))
-    world.run_ticks(60)
-    vertices = body.vertices()
-    assert np.abs(vertices).max() < 3.0
-    assert faces_stretch(cloth, vertices) < 2.0
+    stretches = []
+    for _ in range(6):
+        world.run_ticks(30)
+        vertices = body.vertices()
+        assert np.abs(vertices).max() < 3.0
+        stretches.append(faces_stretch(cloth, vertices))
+    # Measured: at most 1.54 while it falls, 1.32 to 1.41 at 3 s (80 a side the most).
+    assert max(stretches) < 1.7, stretches
+    assert stretches[-1] < 1.55, stretches
 
 
 def faces_stretch(cloth: SoftBodySettings, vertices: npt.NDArray[np.float64]) -> float:

@@ -13,3 +13,8 @@ The compiled module contains third-party code:
   into the module from the nanobind package the build uses.
   Copyright (c) 2022 Wenzel Jakob. Licensed under the BSD 3-Clause License;
   see LICENSES/nanobind-LICENSE.
+
+* tsl::robin_map (https://github.com/Tessil/robin-map), a hash table the
+  nanobind runtime library includes from the nanobind package's
+  ext/robin_map directory. Copyright (c) 2017 Thibaut Goetghebuer-Planchon.
+  Licensed under the MIT License; see LICENSES/robin-map-LICENSE.

@@ -3,7 +3,10 @@
 from __future__ import annotations
 
 import json
+import math
+from collections.abc import Callable
 from pathlib import Path
+from typing import Any
 
 import pytest
 
@@ -61,3 +64,59 @@ def test_recording_writes_one_answer_a_line(
 
 def test_every_recording_is_loaded_from_the_file() -> None:
     assert 'p3/pendulum' in json.loads(engines.GOLDEN.read_text())
+
+
+SLOPE = math.radians(20.0)
+
+
+def _slides(friction: float) -> Callable[..., bool]:
+    """A slide over 1 s of a 20 degree slope within 10% (or 3 cm) of g (sin - mu cos) t2 / 2."""
+    accel = max(0.0, engines.G * (math.sin(SLOPE) - friction * math.cos(SLOPE)))
+    return lambda along, moving: abs(along - (0.5 * accel + moving)) <= max(0.03, 0.1 * along)
+
+
+def _rests_at(height: float) -> Callable[[float], bool]:
+    return lambda y: abs(y - height) <= 0.01
+
+
+#: What each recorded omi_physics answer has to satisfy, by key. The scenario
+#: tests compare Jolt with these answers, and where omi_physics is absent
+#: nothing else checks them: a re-recorded answer that breaks one fails here.
+PHYSICAL: dict[str, Callable[..., bool]] = {
+    'smoke/stack': lambda drift, top: drift < 0.05,
+    'stack': lambda drift, top: drift < 0.02 and abs(top - 4.5) <= 0.02,
+    'pyramid': lambda worst: worst < 0.05,
+    'stairs': lambda x, y, z: 3.0 < x < 12.0 and abs(y - 0.2) <= 0.01,
+    'vehicles/settle': lambda height, speed, wheels: speed < 0.01 and wheels == 4,
+    'vehicles/brake': lambda per_speed, speed: speed < 0.05,
+    'vehicles/wall': lambda blow, closing, speed, up: (
+        abs(blow - closing) <= 0.05 * closing and speed < 1.0 and up > 0.99
+    ),
+    **{
+        f'vehicles/corner/{corner}': lambda yaw, g, up: up > 0.99
+        for corner in ('1/0.5', '2/0.3', '2/1')
+    },
+    **{
+        f'slide/{surface}/{friction}': _slides(friction)
+        for surface in ('mesh', 'heightfield')
+        for friction in (0.0, 0.3, 0.8)
+    },
+    **{
+        f'rest/{shape}/{surface}': _rests_at(height)
+        for shape, height in (
+            ('sphere', 0.5),
+            ('box', 0.3),
+            ('capsule', 0.3),
+            ('cylinder', 0.5),
+            ('hull', 0.25),
+        )
+        for surface in ('box', 'mesh', 'heightfield')
+    },
+}
+
+
+@pytest.mark.parametrize('key', sorted(PHYSICAL))
+def test_each_recorded_answer_is_physical(key: str) -> None:
+    answer: Any = json.loads(engines.GOLDEN.read_text())[key]
+    values = answer if isinstance(answer, list) else [answer]
+    assert PHYSICAL[key](*values), (key, answer)

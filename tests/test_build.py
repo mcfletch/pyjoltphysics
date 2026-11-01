@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import dataclasses
 import os
+import pathlib
 import platform
 import subprocess
 import sys
@@ -17,6 +18,7 @@ from pyjoltphysics import BuildOptions, _native
 X86_64 = platform.machine().lower() in {'x86_64', 'amd64'}
 ARM64 = platform.machine().lower() in {'arm64', 'aarch64'}
 FREE_THREADED_PYTHON = bool(sysconfig.get_config_var('Py_GIL_DISABLED'))
+CHECKOUT = pathlib.Path(__file__).resolve().parent.parent
 
 
 def test_the_package_names_its_version() -> None:
@@ -105,3 +107,20 @@ def test_selftest_steps_one_body() -> None:
 
 def test_selftest_runs_repeatedly() -> None:
     assert all(_native.selftest() for _ in range(3))
+
+
+def test_every_library_nanobind_compiles_in_ships_its_licence() -> None:
+    nanobind = pytest.importorskip('nanobind', reason='nanobind is in the test extra')
+    tomllib = pytest.importorskip('tomllib', reason='tomllib reads pyproject.toml from Python 3.11')
+    project = tomllib.loads((CHECKOUT / 'pyproject.toml').read_text(encoding='utf-8'))['project']
+    shipped = set(project['license-files'])
+    notice = (CHECKOUT / 'NOTICE').read_text(encoding='utf-8')
+    vendored = sorted(
+        p.name for p in (pathlib.Path(nanobind.__file__).parent / 'ext').iterdir() if p.is_dir()
+    )
+    assert vendored
+    for name in ['nanobind', *(n.replace('_', '-') for n in vendored)]:
+        licence = f'LICENSES/{name}-LICENSE'
+        assert licence in shipped
+        assert (CHECKOUT / licence).is_file()
+        assert licence in notice

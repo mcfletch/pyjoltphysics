@@ -1,4 +1,4 @@
-// Events: contacts, trigger overlaps, sleep and wake, as fixed 64-byte records.
+// Events: contacts, trigger overlaps, sleep and wake, as fixed 72-byte records.
 //
 // Jolt's listeners run on its job threads during Update and report each pair
 // of sub-shapes. They append raw reports under a mutex; after Update the world

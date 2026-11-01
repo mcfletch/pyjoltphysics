@@ -14,13 +14,15 @@ dynamic = ["version"]
 description = "Jolt Physics for Python, stepped on a native thread"
 readme = "README.md"
 # This project's own code is MIT. The compiled module also carries Jolt
-# Physics (MIT) and the nanobind runtime (BSD-3-Clause).
+# Physics (MIT), the nanobind runtime (BSD-3-Clause) and the tsl::robin_map
+# hash table nanobind includes (MIT).
 license = "MIT AND BSD-3-Clause"
 license-files = [
     "LICENSE",
     "NOTICE",
     "extern/JoltPhysics/LICENSE",
     "LICENSES/nanobind-LICENSE",
+    "LICENSES/robin-map-LICENSE",
 ]
 requires-python = ">=3.10"
 authors = [

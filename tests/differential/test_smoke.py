@@ -106,7 +106,7 @@ def omi_stack() -> tuple[float, float]:
 
 
 def test_a_stack_of_ten_boxes_settles_upright() -> None:
-    omi_drift, omi_top = reference('smoke/stack', omi_stack)
+    _, omi_top = reference('smoke/stack', omi_stack)
     with World(WorldSettings(threads=1)) as jolt:
         jolt.add_bodies(BodyBatch.plane(friction=FRICTION))
         uids, _ = jolt.add_bodies(
@@ -119,7 +119,6 @@ def test_a_stack_of_ten_boxes_settles_upright() -> None:
         assert snapshot is not None
         jolt_poses = snapshot.position[snapshot.rows_of(uids)]
     assert np.abs(jolt_poses[:, [0, 2]]).max() < 0.05
-    assert omi_drift < 0.05
     assert jolt_poses[-1, 1] == pytest.approx(omi_top, abs=0.05)
 
 

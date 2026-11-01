@@ -174,6 +174,47 @@ def _as_triple(row: npt.NDArray[np.floating[Any]]) -> tuple[float, float, float]
     return (float(x), float(y), float(z))
 
 
+class _RowIndex:
+    """The rows of one snapshot's uids, looked up by uid.
+
+    Uids are assigned in order from 1 and never reused. While the highest uid
+    is below four times the body count plus 4096, an array indexed by uid
+    answers each lookup in one step. A world that has streamed many bodies
+    through has a highest uid far above its count, and is searched in its
+    sorted uids instead, so memory stays proportional to the bodies alive.
+    """
+
+    __slots__ = ('_keys', '_order', '_table')
+
+    def __init__(self, held: npt.NDArray[np.uint32]) -> None:
+        self._table: npt.NDArray[np.int64] | None = None
+        self._keys: npt.NDArray[np.int64] = np.empty(0, dtype=np.int64)
+        self._order: npt.NDArray[np.int64] = np.empty(0, dtype=np.int64)
+        top = int(held.max()) if len(held) else 0
+        if top < 4 * len(held) + 4096:
+            table = np.full(top + 1, -1, dtype=np.int64)
+            table[held] = np.arange(len(held), dtype=np.int64)
+            self._table = table
+        else:
+            self._order = np.argsort(held).astype(np.int64)
+            self._keys = held[self._order].astype(np.int64)
+
+    def rows(self, wanted: npt.NDArray[np.integer[Any]]) -> npt.NDArray[np.int64]:
+        """Return the row of each of ``wanted``'s uids, -1 for none, in ``wanted``'s shape."""
+        if self._table is not None:
+            table = self._table
+            inside = (wanted >= 0) & (wanted < len(table))
+            if inside.all():
+                rows: npt.NDArray[np.int64] = table[wanted]
+                return rows
+            found = np.full(wanted.shape, -1, dtype=np.int64)
+            found[inside] = table[wanted[inside]]
+            return found
+        keys = self._keys
+        at = np.minimum(np.searchsorted(keys, wanted), len(keys) - 1)
+        return np.where(keys[at] == wanted, self._order[at], -1)
+
+
 class Snapshot:
     """The state of every body after one tick, as read-only NumPy views.
 
@@ -184,12 +225,12 @@ class Snapshot:
     row into its place.
     """
 
-    __slots__ = ('_native', '_row_table', '_rows')
+    __slots__ = ('_native', '_row_index', '_rows')
 
     def __init__(self, native: _native.Snapshot) -> None:
         self._native = native
         self._rows: dict[int, int] | None = None
-        self._row_table: npt.NDArray[np.int64] | None = None
+        self._row_index: _RowIndex | None = None
 
     def __repr__(self) -> str:
         return '<Snapshot tick=%d bodies=%d applied_seq=%d>' % (
@@ -269,21 +310,19 @@ class Snapshot:
         return self._rows
 
     def rows_of(self, uids: npt.ArrayLike) -> npt.NDArray[np.int64]:
-        """Return the row of each uid, -1 for a uid that is not a body in this snapshot."""
-        wanted = np.atleast_1d(np.asarray(uids)).astype(np.int64, copy=False)
-        if self._row_table is None:
-            # Uids are assigned in order from 1, so a table indexed by uid stays near the body count.
-            held = self._native.uid
-            table = np.full(int(held.max()) + 1 if len(held) else 0, -1, dtype=np.int64)
-            table[held] = np.arange(len(held), dtype=np.int64)
-            self._row_table = table
-        table = self._row_table
-        inside = (wanted >= 0) & (wanted < len(table))
-        if inside.all():
-            return table[wanted]
-        found = np.full(len(wanted), -1, dtype=np.int64)
-        found[inside] = table[wanted[inside]]
-        return found
+        """Return the row of each uid, -1 for a uid that is not a body in this snapshot.
+
+        The result has the shape of ``uids``, and shape (1,) for a single uid.
+        Uids must be integers: anything else raises ``TypeError``.
+        """
+        wanted = np.atleast_1d(np.asarray(uids))
+        if wanted.dtype.kind not in 'iu':
+            if wanted.size:
+                raise TypeError('uids must be integers, not %s' % wanted.dtype)
+            wanted = wanted.astype(np.int64)
+        if self._row_index is None:
+            self._row_index = _RowIndex(self._native.uid)
+        return self._row_index.rows(wanted)
 
     @property
     def characters(self) -> CharacterRows:

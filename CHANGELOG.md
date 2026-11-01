@@ -6,14 +6,13 @@
 - Command batches as arrays from any thread: `add_bodies` (`BodyBatch`), `remove_bodies`, `set_transforms`, `set_velocities`, `add_forces`, `add_impulses`, `add_torques`, `set_gravity`, `activate`, `set_motion_types`, `set_materials`; sequence numbers, `applied_seq`, `at_tick` and `drain_applied`.
 - Shapes: box, sphere, capsule, cylinder and static plane; collision groups and masks; sensors, sleep, CCD and report flags.
 - `Snapshot`: read-only NumPy views of a pooled, reference-counted buffer; `latest()`, `wait_tick()`, `changed` rows, `rows`.
-- Events as 48-byte `EVENT_DTYPE` records: contact and trigger begin, persist and end, aggregated per body pair, and sleep and wake; sleeping pairs held as touching.
+- Events as 72-byte `EVENT_DTYPE` records: contact and trigger begin, persist and end, aggregated per body pair, and sleep and wake; sleeping pairs held as touching. A contact record carries a float64 point, the normal, approach speed, impulse, both materials and the overlap `depth`.
 - Callbacks on the world thread: `before_step`, `after_step`, `on_events`, `at_tick`; an exception stops the world and is raised as `WorldError`.
 - `Shape` and shape ids: `World.add_shape`, `remove_shape`, `shape_info`; convex hulls, triangle meshes, height fields (holes, any rectangular grid), static and mutable compounds; one Jolt shape shared by every body naming an id.
 - `BodyBatch.shape`, `scale`, `shape_offset`, `shape_rotation`, `center_of_mass`; builders `of_shape`, `hulls`, `meshes`, `heightfield`; `heightfield_tiles` and `heightfield_side`.
 - `BodyFlag.SMOOTH_EDGES`, Jolt's enhanced internal edge removal.
 - A sensor added or moved over sleeping bodies reports them; a kinematic sensor meets static bodies.
 - The broad phase is optimised once after a large add of static bodies.
-- The event record is 64 bytes, with a float64 contact point; `impulse` is in begin records only.
 - A future `at_tick` leaves a free-running world idle.
 - `stats()`: `bodies` counts bodies in the world, `queued_bodies` those submitted and not applied; `shapes`, `broadphase_optimizations`.
 - Queries on the calling thread under the world lock's shared side, GIL released: `World.raycast`, `raycast_batch`, `sweep`, `sweep_sphere`, `sweep_capsule`, `sweep_box`, `overlap`; `QueryFilter`, `RayHit`, `RayHits`, `ShapeHit`.
@@ -27,7 +26,6 @@
 - Joints: `Joint` builders `fixed`, `ball`, `hinge`, `slider`, `distance`, `six_dof`, `universal`, `two_axis_hinge`, `motor`; `Motor`, `MotorMode`, `JointKind`, `JointState`; `World.add_joint`, `add_joints`, `remove_joints`, `set_joint_motors`, `set_joints_enabled`; `Snapshot.joints` (`JointRows`); break limits with `EventKind.JOINT` and `EventPhase.BREAK`; jointed bodies do not collide unless `collide`.
 - Materials: `World.materials` (`MaterialTable`, `Material`, `Combine`), pair entries, static and dynamic friction by `WorldSettings.static_friction_speed`; `BodyBatch.material`, `World.set_body_materials`; `Shape.mesh(materials=)` per triangle.
 - `MaterialTable.redefine`: new values for a defined material, from the next tick.
-- The event record's last word is `material_a` and `material_b`.
 - Collision filters: `BodyBatch.filter`, `World.set_filter_table`, `set_body_filters`.
 - The contact filter: `World.set_contact_filter`, asked for pairs with `BodyFlag.FILTER_CONTACTS`.
 - Gravity zones (`GravityZone`, `ZoneShape`, `ZoneField`, `World.set_gravity_zones`), characters included; quadratic drag (`BodyBatch.quadratic_drag`, `World.set_drag`).
@@ -37,17 +35,16 @@
 - `World.set_motion` (mass, damping, gravity factor, inertia tensor), `set_flags` (`REPORT`, `NO_SLEEP`, `FILTER_CONTACTS`), `save_state` and `restore_state`.
 - `WorldSettings.penetration_slop`; `World.flush`, which applies due batches and publishes without stepping; `World.bodies_state`; `World.triangle_of` and `Shape.mesh(ids=)`; `MaterialTable.pairing`; `set_contact_filter(either=, recheck=)`; `Shape.box(rounding=)`.
 - Commands from `before_step`, `at_tick` and `drive` code apply in the tick that called them; snapshot history is kept by publish, so several publishes in a tick stay distinct.
-- The event record is 72 bytes, with the contact `depth`.
 - `stats()`: `events_held`, the records the ring holds until the next drain.
 - `BodyFlag.SMOOTH_EDGES` on a moving body removes the seams between static bodies laid flush.
 - Contact persist records carry the impulse estimated for their tick.
 - A quiet lockstep world (nothing awake or acting, two ticks with no batch and no contact report) counts `run_ticks` ticks without stepping; `stats()['quiet_ticks']`.
-- `Snapshot.rows_of` looks uids up in an array indexed by uid.
+- `Snapshot.rows_of` looks uids up in an array indexed by uid while the highest uid is within four times the body count (plus 4096), and in the sorted uids otherwise, so its memory follows the bodies alive; it returns the shape of its input and raises `TypeError` for uids that are not integers.
 - A character standing or knocked down on walkable ground, with no move asked for, stays where it is; a `BEGIN` record's `approach` and `impulse` measure the closing speed against the character's velocity of the tick before.
 - Vehicles: Jolt's `VehicleConstraint` with wheeled, motorcycle and tracked controllers on a dynamic chassis: `World.add_vehicle`, `remove_vehicles`, `vehicle_inputs`, `set_vehicle_surfaces`, `set_surface_table`; `Vehicle`, `VehicleSettings` (`WheelSettings`, `Engine`, `Transmission`, `Differential`, `AntiRollBar`, `VehicleTrack`, `Lean`, `VehicleKind`, `WheelCast`), `as_dict`, `from_dict` and `from_raycast`; `Snapshot.vehicles` (`VehicleRows`, `WheelRows`); steer falloff and rate, holding brake, drag, downforce, rolling resistance and surfaces by wheel or material.
 - Event kind `VEHICLE` with phases `IMPACT` and `CRASH`: a vehicle's heaviest blow of a tick.
 - `stats()['vehicles']`; `pyjoltphysics.testing.vehicle_digest`.
-- `VehicleSettings.from_raycast` tyres have full friction at every slip ratio and slip angle: a car on a road mesh holds its heading without rocking, and launches within 3% of the raycast vehicle.
+- `VehicleSettings.from_raycast` tyres have full friction at every slip ratio and slip angle: a car on a road mesh holds its heading without rocking, and launches within 3% of the raycast vehicle (2.3%, 1.5% and 0.9% slower after 2, 4 and 8 s of throttle).
 - Ragdolls: Jolt's `Ragdoll`, a body a bone with swing-twist limits: `World.add_ragdoll`, `remove_ragdolls`, `set_ragdoll_modes`, `set_ragdoll_pose`, `set_ragdoll_clip`, `set_ragdoll_strength`; `Ragdoll`, `RagdollSettings` (`Bone`, `from_skeleton`, `humanoid`, `as_dict`, `from_dict`), `RagdollMode` (kinematic, powered with a root spring, limp) with blends; `forward_kinematics`; `Snapshot.ragdolls` (`RagdollRows`).
 - Soft bodies: `World.add_soft_body`, `set_soft_pins`, `set_wind`; `SoftBody`, `SoftBodySettings` (`cloth`, `rope`, `ball`, `from_mesh`, `as_dict`, `from_dict`), `Bend`, `LongRange`; bend constraints of compliance 0.01 and iterations by the shortest edge by default (`iterations_for`); pins to world points or bodies; `Snapshot.soft_bodies` (`SoftBodyRows`), vertices and normals copied only for bodies that moved.
 - `add_forces` and `add_impulses` take world `points` to act at.
@@ -68,6 +65,9 @@
 - Values stored as 32-bit floats raise `ValueError` where they overflow one; `WorldSettings.tick_hz` is 1 to 10000, `threads` 1 to 256 and `temp_allocator_mb` 0 to 4095; soft body `iterations` are 1 to 1000 (`softbodies.MAX_ITERATIONS`); uids, groups, masks, filters and material indices outside their integer types raise `ValueError`.
 - The sanitizer build (`tox -e asan`) adds `-fsanitize=float-cast-overflow`.
 - A `World` in a garbage cycle stops calling its callbacks when the collector finalizes it, before any callable is cleared; the free-threaded collector clears with the other threads running.
+- A fork waits for each world thread to finish its tick and holds it between ticks until the fork returns; a world forked from its own callback is not waited for, and a tick still running after 5 s is left to run.
+- The world thread has an 8 MiB stack on Linux and macOS, and Jolt's job threads 8 MiB on Linux, whatever the C library's default.
+- NOTICE and the wheel's licence files carry tsl::robin_map's MIT licence, compiled in with the nanobind runtime.
 
 - `jolt_version()`, `build_options()` and `selftest()` over the compiled module `pyjoltphysics._native`.
 - Jolt Physics v5.6.0 (commit e77f1755), double precision, cross-platform deterministic, SSE4.2 floor on x86-64.

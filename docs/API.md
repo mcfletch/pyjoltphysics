@@ -889,6 +889,11 @@ edges of 5 cm or shorter Jolt's solver tears it apart within a second at
 alone); the default distance bend of compliance 0.01 holds it. Shorter edges
 need more substeps: `iterations_for(edge)` is 5 from 5 cm, 11 at 3.4 cm and 20
 at 2.5 cm, measured at 60 Hz; a world at 120 Hz needs about half.
+With the defaults the edges still stretch: that 2 m cloth, draped over a
+0.6 m sphere on a floor at 60 Hz, settles with its longest face edge 1.31 to
+1.36 times its rest length at 32 to 80 vertices a side, and an edge reaches
+1.54 times while it falls. `long_range` attachments limit the stretch of a
+pinned cloth.
 
 Builders: `cloth(width, depth, columns, rows, mass)` (y = 0, centred, faces
 up; `corner_indices()`), `rope(points, segments=None, mass=0.1,
@@ -1161,6 +1166,12 @@ collected together. When the collector finds such a cycle, the world's
 finalizer runs first: no callback starts after it, and a callback running on
 another thread returns before the collector clears anything.
 
+The world thread has an 8 MiB stack on Linux and macOS, whatever the C
+library's default (128 KiB on musl, 512 KiB for a macOS thread, RLIMIT_STACK
+on glibc). Jolt's job threads, which run the contact filter, get 8 MiB on
+Linux; on macOS they have 512 KiB. On Windows both have the executable's
+default stack, 2 MB for python.exe, as Python's own threads do.
+
 ## Saving and restoring
 
 `save_state()` returns the bodies' and joints' state as bytes: Jolt's
@@ -1205,6 +1216,13 @@ call on a parent's world raises `RuntimeError`, and the world is never torn
 down there (its threads exist only in the parent). The child makes its own
 worlds. The hooks are `os.register_at_fork` handlers registered with the
 first world.
+
+Before the fork the hook waits for each world thread to finish its tick and
+holds it between ticks until the fork returns, so the child inherits no lock
+or half-made allocation from a world thread, and Jolt's job threads are idle.
+A world forked from its own callback or contact filter is not waited for. A
+tick that has not ended after 5 s, such as a callback waiting on the thread
+that forks, is left running and the fork goes ahead.
 
 ## `pyjoltphysics.testing`
 

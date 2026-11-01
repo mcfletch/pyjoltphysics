@@ -36,11 +36,13 @@ WorldCore::WorldCore(const WorldSettings &settings)
         JPH::uint(size_t(settings.temp_allocator_mb) << 20));
     if (settings.threads <= 1)
         jobs_ = std::make_unique<JPH::JobSystemSingleThreaded>(JPH::cMaxPhysicsJobs);
-    else
+    else {
         // The world thread runs jobs while it waits for a step, so it is one
-        // of the `threads`.
+        // of the `threads`. The pool's threads run the contact filter.
+        DefaultThreadStack stack(kThreadStack);
         jobs_ = std::make_unique<JPH::JobSystemThreadPool>(
             JPH::cMaxPhysicsJobs, JPH::cMaxPhysicsBarriers, settings.threads - 1);
+    }
     system_.Init(settings.max_bodies, 0, settings.max_body_pairs, settings.max_contact_constraints,
                  layers_, layers_, layers_);
     system_.SetGravity(JPH::Vec3(float(settings.gravity[0]), float(settings.gravity[1]),
@@ -215,7 +217,8 @@ void WorldCore::start() {
     mode_ = Mode::Free;
     stopping_ = false;
     running_ = true;
-    thread_ = std::thread([self = shared_from_this()] { self->loop(); });
+    working_ = true;
+    thread_ = Thread(kThreadStack, [self = shared_from_this()] { self->loop(); });
 }
 
 void WorldCore::cut_lockstep() {
@@ -286,7 +289,8 @@ void WorldCore::run_ticks(uint64_t count) {
             guard.lock();
             stopping_ = false;
             running_ = true;
-            thread_ = std::thread([self = shared_from_this()] { self->loop(); });
+            working_ = true;
+            thread_ = Thread(kThreadStack, [self = shared_from_this()] { self->loop(); });
         }
         // Set after the join: a callback of the thread being joined may still
         // call start() and switch the mode.
@@ -397,15 +401,22 @@ void WorldCore::loop() {
         Mode mode;
         {
             std::unique_lock<std::mutex> guard(control_);
+            park();
             bool go = false;
             while (!go) {
                 if (stopping_)
                     break;
+                if (fork_wanted_) {
+                    wake_.wait(guard);
+                    continue;
+                }
                 if (statics_since_optimize_ >= kOptimizeAfterStatics &&
                     (mode_ == Mode::Lockstep ? wanted_ == 0 : Clock::now() < next || !busy())) {
+                    working_ = true;
                     guard.unlock();
                     optimize_if_due();
                     guard.lock();
+                    park();
                     continue;
                 }
                 if (mode_ == Mode::Lockstep) {
@@ -435,6 +446,7 @@ void WorldCore::loop() {
                 }
                 wake_.wait_until(guard, next);
             }
+            working_ = true;
             if (!go)
                 break;
             mode = mode_;
@@ -473,6 +485,7 @@ void WorldCore::loop() {
     {
         std::lock_guard<std::mutex> guard(control_);
         running_ = false;
+        park();
         done_.notify_all();
     }
     {
@@ -1090,26 +1103,63 @@ void stop_all_worlds() {
 }
 
 // The registry lock is held from before the fork to after it, so the child
-// starts with no world half made and can make its own.
+// starts with no world half made and can make its own. Each world thread is
+// held between ticks, so no lock or allocation of its own, Jolt's or the C
+// library's is half taken in the child.
 void fork_prepare() {
     registry_lock.lock();
     forking = live_worlds();
+    for (auto &world : forking)
+        world->hold_for_fork();
 }
 
 void fork_parent() {
+    for (auto &world : forking)
+        world->release_after_fork(true);
     forking.clear();
     registry_lock.unlock();
 }
 
 void fork_child() {
-    for (auto &world : forking)
+    for (auto &world : forking) {
+        world->release_after_fork(false);
         world->mark_forked();
+    }
     registry.clear();
     // The child keeps these references: destroying a world here would touch
     // threads and locks that belong to the parent.
     new std::vector<std::shared_ptr<WorldCore>>(std::move(forking));
     forking.clear();
     registry_lock.unlock();
+}
+
+void WorldCore::park() {
+    working_ = false;
+    parked_.notify_all();
+}
+
+// A tick that has not ended after kForkWait, such as a callback waiting on the
+// thread that forks, is left running and the fork goes ahead.
+void WorldCore::hold_for_fork() {
+    if (in_callback())
+        return;
+    std::unique_lock<std::mutex> guard(control_);
+    fork_wanted_ = true;
+    parked_.wait_for(guard, kForkWait, [&] { return !working_; });
+    guard.release();
+    fork_held_ = true;
+}
+
+// The child has no world thread to wake, and its condition variables may
+// record waiters only the parent has.
+void WorldCore::release_after_fork(bool parent) {
+    if (!fork_held_)
+        return;
+    fork_held_ = false;
+    fork_wanted_ = false;
+    if (parent)
+        wake_.notify_all();
+    control_.unlock();
 }
 
 void WorldCore::mark_forked() {

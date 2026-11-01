@@ -37,8 +37,8 @@ def test_standing_still_it_settles_at_the_same_ride_height() -> None:
     omi = V.reference('settle', _settled, V.FLAT, V.constant(), 2.0)
     jolt = _settled(V.run_jolt(V.FLAT, V.constant(), 2.0))
     assert jolt[0] == pytest.approx(omi[0], abs=1e-3)
-    assert jolt[1] < 0.01 and omi[1] < 0.01
-    assert jolt[2] == omi[2] == 4
+    assert jolt[1] < 0.01
+    assert jolt[2] == omi[2]
 
 
 def _launch_speeds(drive: V.Drive) -> list[float]:
@@ -49,7 +49,8 @@ def _launch_speeds(drive: V.Drive) -> list[float]:
 def test_it_accelerates_to_speed_in_a_straight_line() -> None:
     omi = V.reference('launch', _launch_speeds, V.FLAT, LAUNCH, 8.3)
     drive = V.run_jolt(V.FLAT, LAUNCH, 8.3)
-    assert _launch_speeds(drive) == pytest.approx(omi, rel=0.04)
+    # Measured: 2.3%, 1.5% and 0.9% below omi_physics at 2.3, 4.3 and 8.3 s.
+    assert _launch_speeds(drive) == pytest.approx(omi, rel=0.03)
     # Straight: a road's width is 7 m; it stays within half a metre of the line.
     assert abs(drive.position[-1, 0]) < 0.5 and abs(drive.heading()[-1]) < 0.01
 
@@ -71,7 +72,7 @@ def _braking(drive: V.Drive) -> list[float]:
 def test_it_brakes_to_a_stop_over_the_same_distance_per_speed() -> None:
     omi = V.reference('brake', _braking, V.FLAT, BRAKE, 8.0)
     jolt = _braking(V.run_jolt(V.FLAT, BRAKE, 8.0))
-    assert omi[1] < 0.05 and jolt[1] < 0.05
+    assert jolt[1] < 0.05
     assert jolt[0] == pytest.approx(omi[0], rel=0.08)
 
 
@@ -92,11 +93,11 @@ def test_steady_cornering_pulls_the_same_lateral_g(accelerate: float, steer: flo
         ]
 
     seconds = accelerate + 3.3
-    omi_yaw, omi_g, omi_up = V.reference(
+    omi_yaw, omi_g, _ = V.reference(
         'corner/%g/%g' % (accelerate, steer), cornering, V.FLAT, inputs, seconds
     )
     jolt_yaw, jolt_g, jolt_up = cornering(V.run_jolt(V.FLAT, inputs, seconds))
-    assert omi_up > 0.99 and jolt_up > 0.99
+    assert jolt_up > 0.99
     assert jolt_g == pytest.approx(omi_g, rel=0.06)
     assert jolt_yaw == pytest.approx(omi_yaw, rel=0.10)
 
@@ -151,9 +152,9 @@ def _wall(drive: V.Drive) -> list[float]:
 def test_a_wall_stops_it_with_the_blow_of_its_closing_speed() -> None:
     omi = V.reference('wall', _wall, V.wall(40.0), LAUNCH, 4.0)
     jolt = _wall(V.run_jolt(V.wall(40.0), LAUNCH, 4.0))
-    for blow, closing, speed, up in (omi, jolt):
-        assert blow == pytest.approx(closing, rel=0.05)
-        assert speed < 1.0 and up > 0.99
+    blow, closing, speed, up = jolt
+    assert blow == pytest.approx(closing, rel=0.05)
+    assert speed < 1.0 and up > 0.99
     assert jolt[0] == pytest.approx(omi[0], rel=0.08)
 
 

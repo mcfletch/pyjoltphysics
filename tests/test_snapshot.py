@@ -4,11 +4,12 @@ from __future__ import annotations
 
 import gc
 import threading
+import tracemalloc
 
 import numpy as np
 import pytest
 
-from pyjoltphysics import BodyBatch, Snapshot, World
+from pyjoltphysics import BodyBatch, MotionType, Snapshot, World
 from pyjoltphysics.testing import MakeWorld, floor, grid
 
 
@@ -149,6 +150,65 @@ def test_rows_of_names_missing_uids(make_world: MakeWorld) -> None:
     world.run_ticks(1)
     snapshot = latest(world)
     assert snapshot.rows_of([int(uids[1]), 999]).tolist() == [snapshot.rows[int(uids[1])], -1]
+
+
+def test_rows_of_allocates_by_live_bodies_not_by_the_highest_uid(make_world: MakeWorld) -> None:
+    world = make_world(threads=1)
+    streamed, _ = world.add_bodies(
+        BodyBatch.spheres(grid(60_000, y0=1e4), motion=MotionType.STATIC)
+    )
+    world.run_ticks(1)
+    world.remove_bodies(streamed)
+    kept, _ = world.add_bodies(BodyBatch.spheres(grid(5)))
+    world.run_ticks(1)
+    snapshot = latest(world)
+    assert int(snapshot.uid.max()) > 60_000
+    tracemalloc.start()
+    try:
+        rows = snapshot.rows_of(kept)
+        peak = tracemalloc.get_traced_memory()[1]
+    finally:
+        tracemalloc.stop()
+    assert rows.tolist() == [snapshot.rows[int(uid)] for uid in kept]
+    # A table indexed by uid would be 480 kB here.
+    assert peak < 16_384
+    gone = [int(streamed[0]), int(streamed[-1]), 0, -1, int(kept[-1]) + 1]
+    assert snapshot.rows_of(gone).tolist() == [-1] * 5
+    assert snapshot.rows_of([[int(kept[0])], [int(streamed[7])]]).tolist() == [
+        [snapshot.rows[int(kept[0])]],
+        [-1],
+    ]
+
+
+def test_rows_of_keeps_the_shape_of_its_input(make_world: MakeWorld) -> None:
+    world = make_world(threads=1)
+    uids, _ = world.add_bodies(BodyBatch.spheres(grid(4)))
+    world.run_ticks(1)
+    snapshot = latest(world)
+    rows = snapshot.rows
+    a, b, c, d = (int(uid) for uid in uids)
+    assert snapshot.rows_of([[a, b], [c, d]]).tolist() == [[rows[a], rows[b]], [rows[c], rows[d]]]
+    assert snapshot.rows_of([[a, 999], [-1, 2**40]]).tolist() == [[rows[a], -1], [-1, -1]]
+    assert snapshot.rows_of(b).tolist() == [rows[b]]
+    assert snapshot.rows_of([]).shape == (0,)
+    assert snapshot.rows_of(np.array(uids, dtype=np.uint32)).tolist() == [
+        rows[u] for u in (a, b, c, d)
+    ]
+
+
+def test_rows_of_rejects_uids_that_are_not_integers(make_world: MakeWorld) -> None:
+    world = make_world(threads=1)
+    uids, _ = world.add_bodies(BodyBatch.spheres(grid(3)))
+    world.run_ticks(1)
+    snapshot = latest(world)
+    with pytest.raises(TypeError, match='integer'):
+        snapshot.rows_of([float(uids[1]) + 0.9])
+
+
+def test_rows_of_in_an_empty_world(make_world: MakeWorld) -> None:
+    world = make_world(threads=1)
+    world.run_ticks(1)
+    assert latest(world).rows_of([1, 2]).tolist() == [-1, -1]
 
 
 def test_many_readers_while_the_world_free_runs(make_world: MakeWorld) -> None:
