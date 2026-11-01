@@ -29,8 +29,15 @@ namespace nb = nanobind;
 void mark_interpreter_exiting();
 // False while the interpreter is finalizing or exiting, when no callback runs.
 bool python_available();
-// True on a thread while it runs the contact filter, inside the step.
-extern thread_local bool in_contact_filter;
+// The "pyjoltphysics" logger, looked up once when the module loads: a world
+// thread logging a callback's error imports nothing, which during interpreter
+// exit could wait on the import lock held by the thread joining it.
+void keep_callback_logger();
+nb::handle callback_logger();
+
+// The world whose contact filter the calling thread runs, inside the step;
+// null on a thread outside every contact filter.
+extern thread_local const void *filtering_world;
 
 class PythonThread {
 public:

@@ -13,10 +13,13 @@
 #include <nanobind/stl/string.h>
 #include <nanobind/stl/tuple.h>
 
+#include <Jolt/Physics/Body/MassProperties.h>
+
+#include <algorithm>
 #include <cmath>
 #include <cstring>
+#include <limits>
 #include <optional>
-#include <algorithm>
 
 namespace pj {
 
@@ -47,6 +50,49 @@ template <typename T> void check_finite(const std::vector<T> &values, const char
     for (T value : values)
         if (!std::isfinite(double(value)))
             throw std::invalid_argument(std::string(name) + " holds a value that is not finite");
+}
+
+// Whether a double the world stores as a 32-bit float stays finite there.
+bool fits_float(double value) { return std::abs(value) <= double(std::numeric_limits<float>::max()); }
+
+// For values stored as floats: finite, and finite once narrowed.
+void check_floats(const std::vector<double> &values, const char *name) {
+    for (double value : values)
+        if (!fits_float(value))
+            throw std::invalid_argument(std::string(name) + " holds a value that is not finite as a 32-bit float");
+}
+
+// An integer setting carried in a double: a whole number in [0, limit], checked
+// before any conversion, since converting an out-of-range double is undefined.
+void check_whole(double value, double limit, const std::string &name) {
+    if (!(value >= 0.0 && value <= limit && value == std::floor(value)))
+        throw std::invalid_argument(name + " is a whole number from 0 to " + std::to_string(uint64_t(limit)) +
+                                    ", not " + std::to_string(value));
+}
+
+constexpr double kMaxU32 = 4294967295.0;
+constexpr double kMaxU16 = 65535.0;
+
+// A body's mass as Jolt stores it: a positive float whose inverse is finite.
+bool usable_mass(double mass) {
+    if (!(mass > 0.0 && fits_float(mass)))
+        return false;
+    const auto narrowed = float(mass);
+    return narrowed > 0.0f && std::isfinite(1.0f / narrowed);
+}
+
+// Whether a dynamic body of a shape with these mass properties (Jolt's, at its
+// own density) and this mass gets an inertia finite and positive as floats.
+bool usable_inertia(const JPH::MassProperties &properties, double mass) {
+    if (!(properties.mMass > 0.0f))
+        return true;  // Jolt fills in a mass of its own
+    const double scale = mass / double(properties.mMass);
+    for (int axis = 0; axis < 3; ++axis) {
+        const double moment = double(properties.mInertia(axis, axis)) * scale;
+        if (!(moment > 0.0 && fits_float(moment) && std::isfinite(1.0f / float(moment))))
+            return false;
+    }
+    return true;
 }
 
 void check_quaternions(const std::vector<double> &q, const char *name) {
@@ -98,9 +144,16 @@ public:
             new std::shared_ptr<WorldCore>(std::move(core_));
             return;
         }
+        // The core keeps no Python object past this point: clear_python also
+        // stops a callback still running from storing its exception, and is
+        // called again, attached, once the thread has stopped.
+        core_->clear_python();
+        {
+            nb::gil_scoped_release release;
+            core_->shutdown();
+        }
         core_->clear_python();
         nb::gil_scoped_release release;
-        core_->shutdown();
         core_.reset();
     }
     World(const World &) = delete;
@@ -251,10 +304,13 @@ AddBodies build_add(World &world, const Vec3s &position, const Quats &orientatio
     check_finite(offsets, "shape_offset");
     check_quaternions(rotations, "shape_rotation");
     check_finite(coms, "center_of_mass");
-    check_finite(add.linear_velocity, "linear_velocity");
-    check_finite(add.angular_velocity, "angular_velocity");
+    check_floats(add.linear_velocity, "linear_velocity");
+    check_floats(add.angular_velocity, "angular_velocity");
     ShapeResolver resolve(world.core().shapes());
     add.shapes.reserve(n);
+    // Consecutive rows usually share a shape; its mass properties are read once.
+    const JPH::Shape *weighed = nullptr;
+    JPH::MassProperties properties;
     for (size_t i = 0; i < n; ++i) {
         const std::string row = " (row " + std::to_string(i) + ")";
         Decoration decoration;
@@ -280,6 +336,18 @@ AddBodies build_add(World &world, const Vec3s &position, const Quats &orientatio
         if (massive && !(std::isfinite(add.mass[i]) && add.mass[i] > 0.0) &&
             !(std::isfinite(add.density[i]) && add.density[i] > 0.0))
             throw std::invalid_argument("a moving body needs a positive mass or density" + row);
+        if (massive) {
+            const JPH::Shape &shape = *add.shapes.back();
+            if (&shape != weighed) {
+                properties = shape.GetMassProperties();
+                weighed = &shape;
+            }
+            const double mass = add.mass[i] > 0.0 ? add.mass[i] : add.density[i] * double(shape.GetVolume());
+            if (!usable_mass(mass) || !usable_inertia(properties, mass))
+                throw std::invalid_argument("the body's mass " + std::to_string(mass) +
+                                            " kg, or the inertia its shape gives it, does not fit a 32-bit float" +
+                                            row);
+        }
         for (float value : {add.friction[i], add.restitution[i], add.linear_damping[i],
                             add.angular_damping[i]})
             if (!(std::isfinite(value) && value >= 0.0f))
@@ -287,6 +355,8 @@ AddBodies build_add(World &world, const Vec3s &position, const Quats &orientatio
                     "friction, restitution and damping are finite and not negative" + row);
         if (!std::isfinite(add.gravity_factor[i]))
             throw std::invalid_argument("gravity_factor is not finite" + row);
+        if (!std::isfinite(add.friction[i] + add.restitution[i]))
+            throw std::invalid_argument("friction and restitution are finite" + row);
     }
     return add;
 }
@@ -427,7 +497,7 @@ nb::dict shape_info(World &world, ShapeId id) {
 uint64_t pushes(World &world, Push kind, const Uids &ids, const Vec3s &values, uint64_t at_tick,
                const std::optional<Vec3s> &points = std::nullopt) {
     AddPushes push{kind, uids(ids), copy<double>(values, ids.shape(0), "values"), {}};
-    check_finite(push.values, "values");
+    check_floats(push.values, "values");
     if (points) {
         push.points = copy<double>(*points, ids.shape(0), "points");
         check_finite(push.points, "points");
@@ -972,13 +1042,13 @@ std::pair<uint32_t, uint64_t> add_vehicle(World &world, Uid chassis, uint8_t kin
     d.cast = cast;
     d.params.assign(params.data(), params.data() + kParamCount);
     for (size_t i = 0; i < kParamCount; ++i)
-        if (!std::isfinite(d.params[i]) && !(i == kDiffLimitedSlip && d.params[i] > 0))
-            throw std::invalid_argument("vehicle setting " + std::to_string(i) + " is not finite");
+        if (!fits_float(d.params[i]) && !(i == kDiffLimitedSlip && d.params[i] > 0))
+            throw std::invalid_argument("vehicle setting " + std::to_string(i) + " is not finite as a 32-bit float");
     const size_t n = wheels.shape(0);
     if (n == 0)
         throw std::invalid_argument("a vehicle has at least one wheel");
     d.wheels.assign(wheels.data(), wheels.data() + wheels.size());
-    check_finite(d.wheels, "wheels");
+    check_floats(d.wheels, "wheels");
     for (size_t i = 0; i < n; ++i) {
         const std::string row = " (wheel " + std::to_string(i) + ")";
         if (!(d.wheel(i, kRadius) > 0.0 && d.wheel(i, kWidth) >= 0.0))
@@ -989,6 +1059,9 @@ std::pair<uint32_t, uint64_t> add_vehicle(World &world, Uid chassis, uint8_t kin
             throw std::invalid_argument("a wheel's spring stiffness is positive and its damping not negative" + row);
         if (!(d.wheel(i, kWheelInertia) > 0.0))
             throw std::invalid_argument("a wheel's inertia is positive" + row);
+        const double side = d.wheel(i, kTrackSide);
+        if (!(side == -1.0 || side == 0.0 || side == 1.0))
+            throw std::invalid_argument("a wheel's track is -1 (none), 0 (left) or 1 (right)" + row);
     }
     if (!(d.params[kMaxRpm] > d.params[kMinRpm] && d.params[kMinRpm] >= 0.0 && d.params[kMaxTorque] >= 0.0))
         throw std::invalid_argument("an engine's rpm range is 0 <= min < max and its torque not negative");
@@ -1004,13 +1077,21 @@ std::pair<uint32_t, uint64_t> add_vehicle(World &world, Uid chassis, uint8_t kin
     if (d.gears.empty() || d.reverse_gears.empty())
         throw std::invalid_argument("a transmission has at least one forward and one reverse gear");
     auto wheel_index = [&](double value, bool optional) {
-        const auto index = int(value);
-        if (double(index) != value || index >= int(n) || index < (optional ? -1 : 0))
+        // Compared as a double first: converting one outside int's range is undefined.
+        if (!(value >= (optional ? -1.0 : 0.0) && value < double(n) && value == std::floor(value)))
             throw std::invalid_argument("wheel index " + std::to_string(value) + " names no wheel");
-        return index;
+        return int(value);
+    };
+    auto floats = [](const double *row, size_t count, const char *name) {
+        check_floats(std::vector<double>(row, row + count), name);
     };
     for (size_t i = 0; i < differentials.shape(0); ++i) {
         const double *r = differentials.data() + 6 * i;
+        // A limited-slip ratio of inf is an open differential.
+        floats(r + 2, 2, "differentials");
+        floats(r + 5, 1, "differentials");
+        if (!(fits_float(r[4]) || (std::isinf(r[4]) && r[4] > 0)))
+            throw std::invalid_argument("a differential's limited-slip ratio is finite or inf");
         DifferentialDesc &out = d.differentials.emplace_back();
         out.left = wheel_index(r[0], true);
         out.right = wheel_index(r[1], true);
@@ -1021,6 +1102,7 @@ std::pair<uint32_t, uint64_t> add_vehicle(World &world, Uid chassis, uint8_t kin
     }
     for (size_t i = 0; i < anti_roll_bars.shape(0); ++i) {
         const double *r = anti_roll_bars.data() + 3 * i;
+        floats(r + 2, 1, "anti_roll_bars");
         AntiRollBarDesc &out = d.anti_roll_bars.emplace_back();
         out.left = wheel_index(r[0], false);
         out.right = wheel_index(r[1], false);
@@ -1030,6 +1112,9 @@ std::pair<uint32_t, uint64_t> add_vehicle(World &world, Uid chassis, uint8_t kin
     }
     for (int side = 0; side < 2; ++side) {
         const double *r = tracks.data() + 5 * side;
+        floats(r + 1, 4, "tracks");
+        if (kind == uint8_t(VehicleKind::Tracked) && !(r[1] > 0.0))
+            throw std::invalid_argument("a track's inertia is positive");
         TrackDesc &out = d.tracks[side];
         out.driven = kind == uint8_t(VehicleKind::Tracked) ? wheel_index(r[0], false) : -1;
         out.inertia = float(r[1]);
@@ -1063,6 +1148,12 @@ std::tuple<uint32_t, uint32_t, uint64_t> add_ragdoll(World &world, const Doubles
     RagdollDesc &d = add.desc;
     d.params.assign(params.data(), params.data() + kRagParamCount);
     check_finite(d.params, "params");
+    check_floats(std::vector<double>(d.params.begin() + kRagQX, d.params.end()), "params");
+    check_whole(d.params[kRagGroup], kMaxU32, "group");
+    check_whole(d.params[kRagMask], kMaxU32, "mask");
+    check_whole(d.params[kRagFilter], kMaxU16, "filter");
+    check_whole(d.params[kRagMaterial], kMaxU16, "material");
+    check_whole(d.params[kRagFlags], kMaxU32, "flags");
     if (d.params[kRagMode] < 0 || d.params[kRagMode] > double(uint8_t(RagdollMode::Limp)))
         throw std::invalid_argument("unknown ragdoll mode " + std::to_string(d.params[kRagMode]));
     check_quaternions(std::vector<double>(d.params.begin() + kRagQX, d.params.begin() + kRagQW + 1), "rotation");
@@ -1076,15 +1167,15 @@ std::tuple<uint32_t, uint32_t, uint64_t> add_ragdoll(World &world, const Doubles
     if (shape_id.shape(0) != n)
         throw std::invalid_argument("shape_id has a row a bone");
     d.bones.assign(bones.data(), bones.data() + bones.size());
-    check_finite(d.bones, "bones");
+    check_floats(d.bones, "bones");
     ShapeResolver resolve(world.core().shapes());
     for (size_t i = 0; i < n; ++i) {
         const std::string row = " (bone " + std::to_string(i) + ")";
         const double parent = d.bone(i, kBoneParent);
         if (i == 0 ? parent != -1.0 : !(parent >= 0.0 && parent < double(i) && parent == std::floor(parent)))
             throw std::invalid_argument("a bone's parent comes before it, and only the first bone has none" + row);
-        if (!(d.bone(i, kBoneMass) > 0.0))
-            throw std::invalid_argument("a bone's mass is positive" + row);
+        if (!usable_mass(d.bone(i, kBoneMass)))
+            throw std::invalid_argument("a bone's mass is positive and fits a 32-bit float" + row);
         if (!(d.bone(i, kBoneTwistMin) <= d.bone(i, kBoneTwistMax)))
             throw std::invalid_argument("a bone's twist limits are min <= max" + row);
         if (std::abs(d.bone(i, kBoneBend)) > 3.0)
@@ -1105,6 +1196,8 @@ std::tuple<uint32_t, uint32_t, uint64_t> add_ragdoll(World &world, const Doubles
         d.shapes.push_back(resolve(0, ShapeParams{}, shape_id.data()[i], decoration, row));
         if (!resolve.dynamic_ok())
             throw std::invalid_argument("a bone's shape can be dynamic (no mesh, height field or plane)" + row);
+        if (!usable_inertia(d.shapes.back()->GetMassProperties(), d.bone(i, kBoneMass)))
+            throw std::invalid_argument("the inertia a bone's shape and mass give it does not fit a 32-bit float" + row);
     }
     RagdollId id = 0;
     Uid first = 0;
@@ -1190,19 +1283,31 @@ std::pair<uint32_t, uint64_t> add_soft_body(World &world, const Doubles &params,
     AddSoftBody add;
     SoftBodyDesc &d = add.desc;
     d.params.assign(params.data(), params.data() + kSoftParamCount);
-    for (size_t i = 0; i < kSoftParamCount; ++i)
-        if (!std::isfinite(d.params[i]) &&
-            !(std::isinf(d.params[i]) && d.params[i] > 0 &&
-              (i == kSoftCompliance || i == kSoftShearCompliance || i == kSoftBendCompliance || i == kSoftVolumeCompliance)))
-            throw std::invalid_argument("soft body setting " + std::to_string(i) + " is not finite");
+    for (size_t i = 0; i < kSoftParamCount; ++i) {
+        const bool compliance = i == kSoftCompliance || i == kSoftShearCompliance || i == kSoftBendCompliance ||
+                                i == kSoftVolumeCompliance;
+        if (compliance && std::isinf(d.params[i]) && d.params[i] > 0)
+            continue;  // inf compliance: no constraint of that kind
+        if (!std::isfinite(d.params[i]) || (i >= kSoftQX && !fits_float(d.params[i])))
+            throw std::invalid_argument("soft body setting " + std::to_string(i) + " is not finite as a 32-bit float");
+    }
+    if (!(d.params[kSoftIterations] >= 1.0 && d.params[kSoftIterations] <= double(kMaxSoftIterations) &&
+          d.params[kSoftIterations] == std::floor(d.params[kSoftIterations])))
+        throw std::invalid_argument("a soft body takes a whole number of solver iterations from 1 to " +
+                                    std::to_string(kMaxSoftIterations));
+    check_whole(d.params[kSoftLra], 2.0, "the long-range attachment kind");
+    check_whole(d.params[kSoftBendType], 2.0, "the bend kind");
+    check_whole(d.params[kSoftGroup], kMaxU32, "group");
+    check_whole(d.params[kSoftMask], kMaxU32, "mask");
+    check_whole(d.params[kSoftFilter], kMaxU16, "filter");
+    check_whole(d.params[kSoftMaterial], kMaxU16, "material");
+    check_whole(d.params[kSoftFlags], kMaxU32, "flags");
     check_quaternions(std::vector<double>(d.params.begin() + kSoftQX, d.params.begin() + kSoftQW + 1), "rotation");
     for (SoftParam k : {kSoftCompliance, kSoftShearCompliance, kSoftBendCompliance, kSoftVolumeCompliance,
                         kSoftPressure, kSoftLraStretch, kSoftLinearDamping, kSoftMaxVelocity, kSoftFriction,
                         kSoftRestitution, kSoftVertexRadius})
         if (d.params[k] < 0.0)
             throw std::invalid_argument("soft body setting " + std::to_string(k) + " is negative");
-    if (!(d.params[kSoftIterations] >= 1.0))
-        throw std::invalid_argument("a soft body takes at least one solver iteration");
     const size_t n = positions.shape(0);
     if (n == 0)
         throw std::invalid_argument("a soft body has at least one vertex");
@@ -1245,6 +1350,7 @@ nb::ndarray<nb::numpy, const T, Shape> soft_view(const Snapshot &s, const std::v
 }  // namespace
 
 void bind_world(nb::module_ &m) {
+    keep_callback_logger();
     nb::exception<CallbackFailed>(m, "CallbackFailed", PyExc_RuntimeError);
     nb::exception<WorldStopped>(m, "WorldStopped", PyExc_RuntimeError);
 
@@ -1592,8 +1698,18 @@ void bind_world(nb::module_ &m) {
                float time_before_sleep, float sleep_velocity, float min_velocity_for_restitution,
                int collision_steps, uint32_t temp_allocator_mb, float static_friction_speed,
                float penetration_slop) {
-                if (!(std::isfinite(tick_hz) && tick_hz > 0.0))
-                    throw std::invalid_argument("tick_hz is positive");
+                if (!(tick_hz >= 1.0 && tick_hz <= 10000.0))
+                    throw std::invalid_argument("tick_hz is from 1 to 10000");
+                if (temp_allocator_mb > 4095)
+                    throw std::invalid_argument("temp_allocator_mb is from 0 to 4095");
+                for (double g : gravity)
+                    if (!fits_float(g))
+                        throw std::invalid_argument("gravity is not finite as a 32-bit float");
+                for (float value : {time_before_sleep, sleep_velocity, min_velocity_for_restitution})
+                    if (!(std::isfinite(value) && value >= 0.0f))
+                        throw std::invalid_argument(
+                            "time_before_sleep, sleep_velocity and min_velocity_for_restitution are finite and "
+                            "not negative");
                 if (!(std::isfinite(max_catch_up) && max_catch_up >= 0.0))
                     throw std::invalid_argument("max_catch_up is zero or positive");
                 if (threads < 1)
@@ -1734,8 +1850,8 @@ void bind_world(nb::module_ &m) {
                     set.linear = copy<double>(*linear, n, "linear");
                 if (angular)
                     set.angular = copy<double>(*angular, n, "angular");
-                check_finite(set.linear, "linear");
-                check_finite(set.angular, "angular");
+                check_floats(set.linear, "linear");
+                check_floats(set.angular, "angular");
                 return w.core().submit(Command(std::move(set)), at_tick);
             },
             nb::arg("uids"), nb::arg("linear").none(), nb::arg("angular").none(),
@@ -1763,8 +1879,8 @@ void bind_world(nb::module_ &m) {
             [](World &w, std::array<double, 3> gravity, uint64_t at_tick) {
                 SetGravity set{{gravity[0], gravity[1], gravity[2]}};
                 for (double g : set.gravity)
-                    if (!std::isfinite(g))
-                        throw std::invalid_argument("gravity is not finite");
+                    if (!fits_float(g))
+                        throw std::invalid_argument("gravity is not finite as a 32-bit float");
                 return w.core().submit(Command(set), at_tick);
             },
             nb::arg("gravity"), nb::arg("at_tick") = 0)
@@ -1867,7 +1983,7 @@ void bind_world(nb::module_ &m) {
             "set_wind",
             [](World &w, const Uids &ids, const Vec3s &force, uint64_t at_tick) {
                 SetWind set{uids(ids), copy<double>(force, ids.shape(0), "force")};
-                check_finite(set.force, "force");
+                check_floats(set.force, "force");
                 return w.core().submit(Command(std::move(set)), at_tick);
             },
             nb::arg("uids"), nb::arg("force"), nb::arg("at_tick") = 0)
@@ -2035,6 +2151,9 @@ void bind_world(nb::module_ &m) {
             "restore_state",
             [](World &w, nb::bytes data, uint64_t at_tick) {
                 auto copy = std::make_shared<const std::string>(data.c_str(), data.size());
+                const std::string problem = state_problem(*copy);
+                if (!problem.empty())
+                    throw std::invalid_argument(problem);
                 return w.core().submit(Command(RestoreState{std::move(copy)}), at_tick);
             },
             nb::arg("data"), nb::arg("at_tick") = 0)
@@ -2136,6 +2255,15 @@ void bind_world(nb::module_ &m) {
             },
             nb::arg("tick"), nb::arg("fn"))
         .def_prop_ro("error", [](const World &w) { return w.core().error(); })
+        .def_prop_ro(
+            "last_rejection",
+            [](const World &w) -> std::optional<std::string> {
+                std::string message = w.core().last_rejection();
+                if (message.empty())
+                    return std::nullopt;
+                return message;
+            },
+            "Why the world could not apply the last batch whose apply raised; None when none has.")
         .def_prop_ro("tick", [](const World &w) { return w.core().tick(); })
         .def_prop_ro("lockstep", [](const World &w) { return w.core().lockstep(); })
         .def_prop_ro("forked", [](const World &w) { return w.core().forked(); })

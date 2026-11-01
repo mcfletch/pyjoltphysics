@@ -103,7 +103,9 @@ float VehicleSystem::wheel_grip(const Vehicle &vehicle, size_t wheel, const JPH:
 
 bool VehicleSystem::add(const VehicleDesc &desc, const JPH::BodyID &chassis) {
     JPH::Body *body = system_.GetBodyLockInterfaceNoLock().TryGetBody(chassis);
-    if (body == nullptr || !body->IsDynamic() || desc.wheels.empty())
+    // A soft body is dynamic too, and a vehicle constraint on one breaks Jolt's island builder.
+    if (body == nullptr || !body->IsRigidBody() || !body->IsDynamic() || desc.wheels.empty() ||
+        by_chassis_.count(desc.chassis) != 0)
         return false;
     const auto &p = desc.params;
     const size_t count = desc.wheel_count();
@@ -206,6 +208,8 @@ bool VehicleSystem::add(const VehicleDesc &desc, const JPH::BodyID &chassis) {
         vehicle->steered[i] = desc.wheel(i, kSteered) != 0.0 ? 1 : 0;
     vehicle->constraint = new JPH::VehicleConstraint(*body, settings);
     const JPH::ObjectLayer layer = body->GetObjectLayer();
+    vehicle->layer = layer;
+    layers_.retain(layer);
     const JPH::Vec3 up = settings.mUp;
     const float slope = float(p[kMaxSlope]);
     switch (static_cast<WheelCast>(desc.cast)) {
@@ -255,6 +259,7 @@ void VehicleSystem::detach(Vehicle &vehicle) {
     system_.RemoveStepListener(vehicle.constraint);
     system_.RemoveConstraint(vehicle.constraint);
     by_chassis_.erase(vehicle.desc.chassis);
+    layers_.release(vehicle.layer);
 }
 
 void VehicleSystem::remove(const std::vector<VehicleId> &ids) {
@@ -371,12 +376,14 @@ void VehicleSystem::before_step(double dt) {
             controller->SetDriverInput(v.throttle, right, brake, v.handbrake);
         }
 
+        // The forces below never wake the chassis: a parked car falls asleep like any body.
         if (!body->IsActive())
             continue;
         JPH::BodyInterface &bodies = system_.GetBodyInterfaceNoLock();
+        constexpr JPH::EActivation keep = JPH::EActivation::DontActivate;
         const float drag = float(p[kDrag]);
         if (drag > 0.0f && speed > 1e-3f)
-            bodies.AddForce(v.body, -velocity * (drag * speed));
+            bodies.AddForce(v.body, -velocity * (drag * speed), keep);
         bool grounded = false;
         const float rolling = float(p[kRollingResistance]);
         const JPH::Wheels &wheels = v.constraint->GetWheels();
@@ -401,11 +408,11 @@ void VehicleSystem::before_step(double dt) {
                 continue;
             const float load = std::max(0.0f, wheel->GetSuspensionLambda()) / step;
             bodies.AddForce(v.body, along * (-std::copysign(resistance * load, rolling_speed)),
-                            wheel->GetContactPosition());
+                            wheel->GetContactPosition(), keep);
         }
         const float downforce = float(p[kDownforce]);
-        if (downforce > 0.0f && grounded)
-            bodies.AddForce(v.body, -v.constraint->GetWorldUp() * (downforce * speed * speed));
+        if (downforce > 0.0f && grounded && speed > 1e-3f)
+            bodies.AddForce(v.body, -v.constraint->GetWorldUp() * (downforce * speed * speed), keep);
     }
 }
 

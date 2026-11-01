@@ -56,6 +56,10 @@ enum SoftParam : uint32_t {
     kSoftParamCount,
 };
 
+// The most solver iterations a soft body takes a tick; a tick costs iterations
+// passes over the body's constraints.
+constexpr uint32_t kMaxSoftIterations = 1000;
+
 struct SoftPin {
     uint32_t vertex = 0;
     Uid body = kNoBody;              // 0 pins to a world point

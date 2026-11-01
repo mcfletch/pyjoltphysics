@@ -40,13 +40,25 @@ import numpy as np
 import numpy.typing as npt
 
 from pyjoltphysics import _native
+from pyjoltphysics._checks import whole_number
 from pyjoltphysics.enums import BodyFlag
 from pyjoltphysics.queries import ALL_GROUPS
 
 if TYPE_CHECKING:
     from pyjoltphysics.world import World
 
-__all__ = ['Bend', 'LongRange', 'SoftBody', 'SoftBodyRows', 'SoftBodySettings', 'iterations_for']
+__all__ = [
+    'MAX_ITERATIONS',
+    'Bend',
+    'LongRange',
+    'SoftBody',
+    'SoftBodyRows',
+    'SoftBodySettings',
+    'iterations_for',
+]
+
+#: The most solver iterations a soft body takes a step.
+MAX_ITERATIONS = 1000
 
 #: A pin set: vertex indices and their targets, (n, 3) world points or points in ``bodies``' frames.
 Pins = tuple[Sequence[int], npt.ArrayLike]
@@ -158,6 +170,11 @@ class SoftBodySettings:
             )
         if self.iterations is None:
             self.iterations = iterations_for(self._shortest_edge())
+        self.iterations = whole_number(self.iterations, 1, MAX_ITERATIONS, 'iterations')
+        self.group = whole_number(self.group, 0, 0xFFFFFFFF, 'group')
+        self.mask = whole_number(self.mask, 0, 0xFFFFFFFF, 'mask')
+        self.filter = whole_number(self.filter, 0, 0xFFFF, 'filter')
+        self.material = whole_number(self.material, 0, 0xFFFF, 'material')
         if not (math.isfinite(self.mass) and self.mass >= 0.0):
             raise ValueError('mass is finite and not negative, not %r' % (self.mass,))
         if self.masses is not None:
@@ -390,11 +407,13 @@ def iterations_for(edge: float) -> int:
     5 from 5 cm up, rising with the square of the edge's shortfall: 11 at
     3.4 cm, 20 at 2.5 cm. Measured on 2 m cloths of 40 to 80 vertices a side
     dropped on a sphere; with fewer, edges under 5 cm are torn apart when the
-    cloth meets the sphere. A world stepped at 120 Hz needs about half.
+    cloth meets the sphere. A world stepped at 120 Hz needs about half. The
+    count stops at :data:`MAX_ITERATIONS`, reached at an edge of 3.5 mm.
     """
     if not edge > 0.0:
         raise ValueError('an edge is longer than 0, not %r' % (edge,))
-    return max(5, math.ceil(5.0 * (0.05 / edge) ** 2))
+    wanted = 5.0 * (0.05 / edge) ** 2
+    return MAX_ITERATIONS if wanted >= MAX_ITERATIONS else max(5, math.ceil(wanted))
 
 
 def pin_arrays(

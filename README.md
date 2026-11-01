@@ -167,7 +167,7 @@ the generated one differ.
 ```
 pytest
 tox                 # lint, typecheck, stubs and the suite per interpreter
-tox -e asan         # the suite against an AddressSanitizer and UBSan build (Linux, gcc)
+tox -e asan         # the suite against an ASan, UBSan and float-cast-overflow build (Linux, gcc)
 python benchmarks/boxes5000.py --threads 1 8
 python benchmarks/statics.py --threads 1 8
 python benchmarks/characters.py --threads 1 8     # characters, tile streaming, rays, query waits

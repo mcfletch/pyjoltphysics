@@ -54,6 +54,19 @@
 - `stats()['ragdolls']`, `stats()['soft_bodies']`; `pyjoltphysics.testing.ragdoll_digest` and `soft_digest`.
 - `stats()`: `ragdolls_ms` and `soft_bodies_ms`, the world thread's time a tick on ragdolls and on soft bodies.
 - A push (`add_impulses`, `add_forces`, `add_torques`) on a body still awake starts its sleep timer again, so a body pushed near the end of its rest moves.
+- `save_state` bytes lead with a 32-byte header: `PJST`, format version 1, the Jolt version id, the payload length and an FNV-1a 64-bit hash. `restore_state` raises `ValueError` for bytes whose header, length or hash do not match, and a state Jolt cannot read to its last byte is rejected with the world's own state kept.
+- `save_state` from a step callback reads the tick as it stands.
+- `remove_bodies` and `remove_ragdolls` take the same things with a body: vehicles on it, soft bodies' pins to it, joints, drag, tracks and its collision layer's use.
+- `add_vehicle` rejects a soft body as chassis and a chassis that already carries a vehicle; `add_joints` rejects a soft body.
+- A vehicle's drag, downforce and rolling resistance never wake its chassis, so a parked car falls asleep.
+- Collision layers are counted by their users and freed with the last; an add past the 65535 a world holds at once raises `ValueError`.
+- A batch that raises while the world thread applies it is rejected (`World.last_rejection` says why) and the world steps on; anything else the world thread raises stops the world with a `WorldError`.
+- A body whose position or velocity stops being finite stops the world with a `WorldError` naming it.
+- `save_state`, `flush`, `wait_tick` and `run_ticks` from the contact filter raise `RuntimeError`; `stop` from it ends the thread after the tick.
+- `start()` while `run_ticks` waits makes `run_ticks` raise `WorldStopped`; `stop()` racing `run_ticks` or `start` on another thread joins the thread it stopped.
+- A dropped `World` is freed at once (its `MaterialTable` holds it weakly); a world dropped or collected from its own callback, or while the interpreter exits, ends its thread after the tick, and keeps no Python object once dropped.
+- Values stored as 32-bit floats raise `ValueError` where they overflow one; `WorldSettings.tick_hz` is 1 to 10000 and `temp_allocator_mb` 0 to 4095; soft body `iterations` are 1 to 1000 (`softbodies.MAX_ITERATIONS`); uids, groups, masks, filters and material indices outside their integer types raise `ValueError`.
+- The sanitizer build (`tox -e asan`) adds `-fsanitize=float-cast-overflow`.
 
 - `jolt_version()`, `build_options()` and `selftest()` over the compiled module `pyjoltphysics._native`.
 - Jolt Physics v5.6.0 (commit e77f1755), double precision, cross-platform deterministic, SSE4.2 floor on x86-64.

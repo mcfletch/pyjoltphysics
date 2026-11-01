@@ -32,6 +32,7 @@ import numpy as np
 import numpy.typing as npt
 
 from pyjoltphysics import _native
+from pyjoltphysics._checks import whole_numbers
 from pyjoltphysics.bodies import BodyBatch
 from pyjoltphysics.characters import Character, CharacterCapabilities, CharacterRows
 from pyjoltphysics.enums import BodyFlag, MotionType, MotorMode, ShapeKind
@@ -81,9 +82,12 @@ WorldStopped = _native.WorldStopped
 
 
 class WorldError(RuntimeError):
-    """A callback raised on the world thread, which stopped the world.
+    """A callback raised on the world thread, or the world thread failed, which stopped the world.
 
-    The callback's exception is ``__cause__`` and ``World.error``.
+    The callback's exception is ``__cause__`` and ``World.error``. The world
+    thread fails where a body's position or velocity stops being finite (the
+    message names the body) and where the C++ code raises outside any batch;
+    ``World.error`` is then a ``RuntimeError`` with the message.
     """
 
 
@@ -109,8 +113,24 @@ def _install_process_hooks() -> None:
         _hooks_installed = True
 
 
+def _weak_sender(method: Callable[[MaterialTable], int]) -> Callable[[MaterialTable], int]:
+    """Return ``method`` called through a weak reference to its world."""
+    weak = weakref.WeakMethod(method)
+
+    def send(table: MaterialTable) -> int:
+        bound = weak()
+        if bound is None:
+            raise RuntimeError('the world this material table belongs to is gone')
+        return bound(table)
+
+    return send
+
+
 def _uids(uids: npt.ArrayLike) -> npt.NDArray[np.uint32]:
-    return np.ascontiguousarray(np.atleast_1d(np.asarray(uids)), dtype=np.uint32)
+    array = np.atleast_1d(np.asarray(uids))
+    if array.ndim != 1:
+        raise ValueError('uids is one-dimensional, not of shape %s' % (array.shape,))
+    return np.ascontiguousarray(whole_numbers(array, np.uint32, 'uids'))
 
 
 def _vectors(values: npt.ArrayLike, count: int, width: int, name: str) -> npt.NDArray[np.float64]:
@@ -331,7 +351,9 @@ class World:
         # Each Shape object is built once per world; the entry goes with the Shape.
         self._shape_ids: weakref.WeakKeyDictionary[Shape, int] = weakref.WeakKeyDictionary()
         self._shapes_lock = threading.Lock()
-        self._materials = MaterialTable(self._send_materials)
+        # The table holds the world weakly, so a dropped world is freed at once
+        # on the dropping thread rather than by the cycle collector on any thread.
+        self._materials = MaterialTable(_weak_sender(self._send_materials))
         self._drivers: dict[int, PoseFunction] = {}
         self._drivers_lock = threading.Lock()
 
@@ -357,19 +379,33 @@ class World:
     # -- the thread --------------------------------------------------------
 
     def start(self) -> None:
-        """Free-run the world at ``tick_hz``, starting its thread if it is not running."""
+        """Free-run the world at ``tick_hz``, starting its thread if it is not running.
+
+        A :meth:`run_ticks` waiting on another thread raises ``WorldStopped``
+        (a ``RuntimeError``) for the ticks it had not run. From a callback the
+        world free-runs from the next tick, and a :meth:`stop` asked for
+        earlier stands.
+        """
         self._raising(self._native.start)
 
     def stop(self) -> None:
-        """Stop the world thread and join it; from a callback, stop after the current tick."""
+        """Stop the world thread and join it; from a callback or the contact filter, stop after the current tick."""
         self._native.stop()
 
     def run_ticks(self, count: int) -> None:
-        """Run exactly ``count`` ticks on the world thread, unpaced, and return when they are done."""
+        """Run exactly ``count`` ticks on the world thread, unpaced, and return when they are done.
+
+        Raises ``RuntimeError`` from a callback or the contact filter, and
+        ``WorldStopped`` (a ``RuntimeError``) where :meth:`stop` or
+        :meth:`start` ends the run before its ticks are done.
+        """
         self._raising(self._native.run_ticks, count)
 
     def wait_tick(self, tick: int, timeout: float | None = None) -> bool:
-        """Wait until a snapshot of ``tick`` or later is published; False on timeout or stop."""
+        """Wait until a snapshot of ``tick`` or later is published; False on timeout or stop.
+
+        Raises ``RuntimeError`` from a callback or the contact filter.
+        """
         return bool(
             self._raising(self._native.wait_tick, tick, -1.0 if timeout is None else timeout)
         )
@@ -386,9 +422,18 @@ class World:
 
     @property
     def error(self) -> BaseException | None:
-        """The exception a callback raised, which stopped the world; None otherwise."""
+        """The exception that stopped the world (see :class:`WorldError`); None otherwise."""
         error = self._native.error
         return error if isinstance(error, BaseException) else None
+
+    @property
+    def last_rejection(self) -> str | None:
+        """Why the world thread could not apply the last batch that raised while it applied it; None if none has.
+
+        Such a batch (out of memory, say) is counted in ``stats()['rejected']``
+        and the world steps on.
+        """
+        return self._native.last_rejection
 
     @property
     def submitted_seq(self) -> int:
@@ -526,7 +571,11 @@ class World:
         return self._native.add_bodies(**arrays, at_tick=at_tick)
 
     def remove_bodies(self, uids: npt.ArrayLike, at_tick: int = 0) -> int:
-        """Queue the removal of bodies; their pairs end with reason ``REMOVED``."""
+        """Queue the removal of bodies; their pairs end with reason ``REMOVED``.
+
+        The vehicles on them, their joints, drag and tracks, soft bodies' pins
+        to them and their collision layers go with them.
+        """
         return self._native.remove_bodies(_uids(uids), at_tick)
 
     def set_transforms(
@@ -899,9 +948,12 @@ class World:
     def add_vehicle(self, chassis: int, settings: VehicleSettings, at_tick: int = 0) -> Vehicle:
         """Queue a vehicle on the dynamic body ``chassis``; return its :class:`Vehicle`.
 
-        The vehicle id is assigned now. A chassis that is not a dynamic body
-        when the batch is applied, or a tracked vehicle with a side holding
-        no wheel, is skipped and counted in ``stats()['rejected']``.
+        The vehicle id is assigned now. A chassis that is not a dynamic rigid
+        body when the batch is applied (a soft body is not one), a chassis
+        that already carries a vehicle, or a tracked vehicle with a side
+        holding no wheel, is skipped and counted in ``stats()['rejected']``.
+        Removing the chassis, by :meth:`remove_bodies` or with its ragdoll,
+        removes the vehicle.
         """
         vid, _ = self._native.add_vehicle(int(chassis), at_tick=at_tick, **settings.native())
         return Vehicle(self, vid, int(chassis))
@@ -981,7 +1033,10 @@ class World:
         return Ragdoll(self, rid, bones, settings)
 
     def remove_ragdolls(self, ids: npt.ArrayLike, at_tick: int = 0) -> int:
-        """Queue removing ragdolls with their bodies; their bones' pairs end with reason ``REMOVED``."""
+        """Queue removing ragdolls with their bodies; their bones' pairs end with reason ``REMOVED``.
+
+        What :meth:`remove_bodies` takes with a body goes with each bone.
+        """
         return self._native.remove_ragdolls(_uids(ids), at_tick)
 
     def set_ragdoll_modes(
@@ -1119,7 +1174,8 @@ class World:
         """Queue joints; return their ids, assigned now, and the batch's sequence number.
 
         A joint naming a body that is not in the world when the batch is
-        applied is skipped and counted in ``stats()['rejected']``.
+        applied, or a soft body, is skipped and counted in
+        ``stats()['rejected']``; a soft body takes pins instead.
         """
         return self._native.add_joints(**joint_arrays(list(joints)), at_tick=at_tick)
 
@@ -1227,9 +1283,10 @@ class World:
         ``fn(a, b, point, normal, approach)`` runs on the Jolt job thread that
         found the pair, inside the step, once per pair: the answer holds until
         the two part. False lets them pass through each other; True or None
-        solves them. It may submit commands and may not query the world
-        (``RuntimeError``) or wait for it. An exception stops the world, as
-        from any callback. None removes it.
+        solves them. It may submit commands and :meth:`stop` the world after
+        the tick; a query, :meth:`save_state`, :meth:`flush`,
+        :meth:`wait_tick` or :meth:`run_ticks` raises ``RuntimeError``. An
+        exception stops the world, as from any callback. None removes it.
         """
         self._native.set_contact_filter(fn, bool(either), bool(recheck))
         return fn
@@ -1332,7 +1389,7 @@ class World:
         they changed (its ``applied_seq`` includes them). The world lock is
         taken exclusively for the apply, so a free-running world thread waits
         for it between its own phases; on the world thread, inside a callback,
-        it does nothing.
+        it does nothing, and from the contact filter it raises ``RuntimeError``.
         """
         self._native.flush()
 
@@ -1340,15 +1397,25 @@ class World:
         """The bodies' and joints' state (Jolt's ``PhysicsSystem::SaveState``), read between ticks.
 
         Positions, velocities, sleep, contacts and constraint state; not the
-        characters, the tick count or the batches still queued.
+        characters, the tick count or the batches still queued. The bytes
+        carry a header with a format version, the Jolt version, their length
+        and a 64-bit FNV-1a hash, and are read back by this build only; their
+        integers are in the machine's byte order. From a step callback it
+        reads the state of the tick being run; from the contact filter, which
+        runs inside the step, it raises ``RuntimeError``.
         """
         return bytes(self._native.save_state())
 
     def restore_state(self, data: bytes, at_tick: int = 0) -> int:
         """Queue reading a :meth:`save_state` back, at the start of the tick that applies it.
 
-        The world must hold the bodies and joints it held when the state was
-        saved; a state of another layout is rejected (``stats()['rejected']``).
+        Bytes whose header, length or hash do not match raise ``ValueError``
+        here, before Jolt reads them: Jolt trusts the counts in the state, so
+        only bytes :meth:`save_state` wrote, unchanged, are read. The hash
+        finds damage, not tampering. When the batch applies, the world must
+        hold the bodies it held when the state was saved, in the same order;
+        a state of other bodies, or one Jolt cannot read to its end, is
+        rejected (``stats()['rejected']``) and the world keeps its own state.
         """
         return self._native.restore_state(bytes(data), at_tick)
 

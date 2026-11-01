@@ -36,10 +36,10 @@ The thread either free-runs or runs in lockstep:
 
 | Call | Effect |
 |---|---|
-| `start()` | free-run at `tick_hz`, starting the thread if it is not running |
-| `run_ticks(n)` | run exactly `n` ticks, unpaced, and return when they are done; the world stays in lockstep until the next `start()` |
-| `stop()` | stop and join the thread; idempotent; from a callback, the thread ends after the current tick |
-| `flush()` | apply the batches due at the current tick on the calling thread, under the world lock, without stepping, and publish a snapshot of the current tick with what they changed; queries then meet what they add; nothing from a callback |
+| `start()` | free-run at `tick_hz`, starting the thread if it is not running; a `run_ticks` waiting on another thread raises `WorldStopped` for the ticks it had not run; from a callback or the contact filter, free-run from the next tick, leaving a stop asked for earlier in place |
+| `run_ticks(n)` | run exactly `n` ticks, unpaced, and return when they are done; the world stays in lockstep until the next `start()`; raises `WorldStopped` when `stop()` or `start()` ends the run first |
+| `stop()` | stop and join the thread; idempotent; from a callback or the contact filter, the thread ends after the current tick and nothing is joined |
+| `flush()` | apply the batches due at the current tick on the calling thread, under the world lock, without stepping, and publish a snapshot of the current tick with what they changed; queries then meet what they add; nothing from a step callback |
 | `with World(...) as world:` | `stop()` at the end of the block |
 
 A free-running world with no pending batch, no awake body, no step callback
@@ -78,9 +78,9 @@ A frozen dataclass; every field has a default.
 
 | Field | Default | Meaning |
 |---|---|---|
-| `tick_hz` | 120.0 | ticks a second |
+| `tick_hz` | 120.0 | ticks a second, 1 to 10000 |
 | `max_catch_up` | 0.1 | seconds behind schedule before a free-running world drops ticks |
-| `gravity` | (0, -9.81, 0) | m/s2 |
+| `gravity` | (0, -9.81, 0) | m/s2, each finite as a 32-bit float |
 | `threads` | 4 | Jolt job threads, the world thread included; 1 steps on the world thread alone |
 | `max_bodies` | 65536 | bodies the world holds; an add batch past it raises `ValueError` |
 | `max_body_pairs`, `max_contact_constraints` | 65536 | Jolt's pair and contact capacities |
@@ -90,7 +90,7 @@ A frozen dataclass; every field has a default.
 | `sleep_velocity` | 0.03 | m/s at every point of the body |
 | `min_velocity_for_restitution` | 1.0 | m/s closing speed below which a contact does not bounce |
 | `collision_steps` | 1 | Jolt collision sub-steps a tick |
-| `temp_allocator_mb` | 16 | step scratch memory allocated up front; more comes from the heap |
+| `temp_allocator_mb` | 16 | step scratch memory allocated up front, 0 to 4095; more comes from the heap |
 | `linear_damping`, `angular_damping` | 0.0 | 1/s, for bodies whose batch names none |
 | `static_friction_speed` | 0.05 | m/s of sliding at a contact below which a material's static friction holds |
 | `penetration_slop` | 0.02 | m two bodies may sink into each other before the solver separates them (Jolt's `mPenetrationSlop`); a resting body sits up to this far into what it rests on |
@@ -108,7 +108,8 @@ A frozen dataclass; every field has a default.
 | `drain_applied()` | (k, 2) uint64 `(seq, tick)`: each batch applied since the last drain and the index of the tick that applied it |
 | `tick` | ticks completed |
 | `lockstep` | True unless `start()` is free-running the world |
-| `error` | the exception a callback raised, or None |
+| `error` | the exception that stopped the world (a callback's, or a `RuntimeError` naming what failed on the world thread), or None |
+| `last_rejection` | why the world thread could not apply the last batch that raised while it applied it (out of memory), or None; the batch is counted in `rejected` and the world steps on |
 | `submitted_seq` | the sequence number of the last batch submitted |
 | `stats()` | counters (`ticks`, `dropped_ticks`, `events_dropped`, `events_held` in the ring until the next drain, `rejected`, `pool`, `bodies` in the world, `queued_bodies` submitted and not yet applied, `shapes` registered, `broadphase_optimizations`, `idle`, `running`) `characters`, `vehicles`, `ragdolls`, `soft_bodies`, `queries` that waited for the world lock, and mean milliseconds a tick since `reset_stats()` (`apply_ms`, `characters_ms` (kinematic targets, characters, vehicles, ragdolls and soft bodies before the step), `ragdolls_ms` (the ragdolls' pose targets and motors before the step, a part of `characters_ms`), `soft_bodies_ms` (the soft bodies' pins and wind before the step and their vertex copies after it), `step_ms`, `events_ms`, `publish_ms`, `callbacks_ms`, `tick_ms`), `quiet_ticks` counted without stepping since `reset_stats()`, with `query_wait_ms` and `query_wait_max_ms`, the mean and longest wait of a query for the world lock |
 
@@ -120,7 +121,14 @@ number. Batches are applied in sequence order at the start of a tick, before
 the step: the first tick whose index (ticks completed before it) is at least
 the batch's `at_tick`, 0 by default. A command naming a uid that is not a body
 is skipped; one the body cannot take (a velocity for a static body) is
-skipped and counted in `stats()['rejected']`.
+skipped and counted in `stats()['rejected']`. A value the world stores as a
+32-bit float (velocities, forces, gravity, masses, vehicle, ragdoll and soft
+body settings) raises `ValueError` where it is finite as a double and not as
+a float; a uid, group, mask, filter or material index outside its integer
+type raises `ValueError` and is never wrapped. A body whose position or
+velocity stops being finite in a step (a gravity factor of 1e38, say) stops
+the world with a `WorldError` naming the body, before the NaN reaches the
+bodies it meets.
 
 | Call | Change |
 |---|---|
@@ -635,14 +643,18 @@ world.vehicle_inputs(ids, rows)              # (n, 4) throttle, steer, brake, ha
 rows = world.latest().vehicles               # VehicleRows; rows.wheels is WheelRows
 ```
 
-A vehicle is Jolt's `VehicleConstraint` over a dynamic chassis body, with a
-`WheeledVehicleController` (`VehicleKind.WHEELED`), `MotorcycleController`
-(`MOTORCYCLE`) or `TrackedVehicleController` (`TRACKED`). Vehicle ids are
-assigned at submission, from 1, and never reused. A vehicle whose chassis is
-not a dynamic body when its batch is applied, or a tracked vehicle with a
-track holding no wheel, is skipped and counted in `stats()['rejected']`.
-Removing the chassis removes the vehicle; `remove_vehicles` leaves the
-chassis. `stats()['vehicles']` counts the vehicles in the world.
+A vehicle is Jolt's `VehicleConstraint` over a dynamic rigid chassis body,
+with a `WheeledVehicleController` (`VehicleKind.WHEELED`),
+`MotorcycleController` (`MOTORCYCLE`) or `TrackedVehicleController`
+(`TRACKED`). Vehicle ids are assigned at submission, from 1, and never reused.
+A vehicle whose chassis is not a dynamic rigid body when its batch is applied
+(a soft body is dynamic and not rigid), whose chassis already carries a
+vehicle, or a tracked vehicle with a track holding no wheel, is skipped and
+counted in `stats()['rejected']`. Removing the chassis removes the vehicle,
+whether `remove_bodies` or `remove_ragdolls` (for a bone) removes it;
+`remove_vehicles` leaves the chassis. `stats()['vehicles']` counts the
+vehicles in the world. `drag`, `downforce` and `rolling_resistance` never wake
+a sleeping chassis, so a parked car falls asleep like any body.
 
 Each tick, before `PhysicsSystem::Update`, the world thread turns each
 vehicle's inputs into the controller's: the steering lock falls with speed and
@@ -866,7 +878,7 @@ tetrahedra=None, mass=1.0, masses=None, ...)`:
 | `bend` | `Bend.NONE`, `DISTANCE` or `DIHEDRAL` |
 | `pressure` | n R T (Pa m3) inside a closed surface |
 | `long_range`, `long_range_stretch` | `LongRange.NONE`, `EUCLIDEAN` or `GEODESIC` attachments to the nearest pinned vertex, and the slack allowed on the rest distance |
-| `iterations`, `linear_damping` (1/s), `max_velocity` (m/s) | the solver; iterations are substeps, None takes `softbodies.iterations_for(shortest edge)` |
+| `iterations`, `linear_damping` (1/s), `max_velocity` (m/s) | the solver; iterations are substeps, a whole number from 1 to 1000 (`softbodies.MAX_ITERATIONS`), None takes `softbodies.iterations_for(shortest edge)` |
 | `friction`, `restitution`, `gravity_factor`, `vertex_radius` (m) | contact; the vertices keep `vertex_radius` from surfaces |
 | `allow_sleep`, `double_sided` | sleeping; faces collide on both sides for queries |
 | `group`, `mask`, `filter`, `material`, `flags` | as a body's |
@@ -931,7 +943,8 @@ A `Joint` holds `body` to `to` (0 for the world). Anchors and axes are world
 coordinates where the bodies stand when the batch is applied; each body
 carries them from then on. Joint ids are assigned at submission, from 1, and
 never reused. A joint naming a body that is not in the world when its batch is
-applied is skipped and counted in `stats()['rejected']`.
+applied, or a soft body (which takes pins), is skipped and counted in
+`stats()['rejected']`.
 
 | Builder | Jolt | Holds |
 |---|---|---|
@@ -1013,8 +1026,14 @@ world.add_bodies(pj.BodyBatch.spheres(positions, filter=1))
 A body's `filter` is an index into the world's (F, F) collides-with table,
 made symmetric; a filter index outside the table meets every filter, so a
 world with no table collides every pair the groups and masks allow. Each
-distinct (group, mask, filter) gets its own Jolt object layer, and Jolt's
-object layer pair filter reads the table, so the broad phase drops a refused pair.
+distinct (group, mask, filter, moving or static, sensor) gets its own Jolt
+object layer, and Jolt's object layer pair filter reads the table, so the
+broad phase drops a refused pair. A layer is freed when the last body (or
+character proxy, or vehicle on it) using it goes, so a world holds at most
+65535 distinct keys at once. An add whose new keys would take the world past
+that raises `ValueError`; batches queued together can pass that check and
+overrun it, and the rows left with no layer, or a filter or motion type change
+with none, are counted in `stats()['rejected']`.
 `set_filter_table` takes effect at the next tick and wakes every dynamic body;
 `set_body_filters` moves bodies to other filters.
 
@@ -1042,9 +1061,11 @@ Each job thread keeps one Python thread state for the world's run, made the
 first time it asks. The world thread holds the world lock exclusively during
 the step and does not hold the GIL, and every call that can wait for the world
 lock releases the GIL first, so a job thread waiting for the GIL waits for no
-thread that waits for it. The filter may submit commands; a query from it
-raises `RuntimeError`, since the step holds the lock. An exception stops the
-world, as from any callback.
+thread that waits for it. The filter may submit commands and call `stop()`,
+which ends the thread after the tick, or `start()`. A query, `save_state`,
+`flush`, `wait_tick` or `run_ticks` from it raises `RuntimeError` at once,
+since each waits for the step it runs inside. An exception stops the world,
+as from any callback.
 
 ## Gravity zones and drag
 
@@ -1119,8 +1140,10 @@ returns its argument, so it can decorate the function; None removes it.
 A callback may submit commands. Those submitted from an `at_tick` callable,
 `before_step` or a `drive` pose function apply in the same tick, before its
 step; those from `after_step` and `on_events` apply at the next tick. It may call
-`stop()`, which ends the thread after the current tick. `run_ticks` and
-`wait_tick` from a callback raise `RuntimeError`.
+`stop()`, which ends the thread after the current tick, and `save_state()`,
+which reads the tick as it stands. `run_ticks` and `wait_tick` from a
+callback raise `RuntimeError`. A world dropped or collected from one of its
+own callbacks ends its thread after the tick.
 
 A callback that raises stops the world. The exception is kept as
 `world.error`, logged once to the `pyjoltphysics` logger, and every waiting
@@ -1140,13 +1163,23 @@ collected together.
 
 `save_state()` returns the bodies' and joints' state as bytes: Jolt's
 `PhysicsSystem::SaveState` (positions, velocities, sleep, contact cache and
-constraint state) after a header naming the bodies it holds. It is read
-under the world lock between ticks. `restore_state(data)` is a command: at
-the start of the tick that applies it the world takes the state back, so a
+constraint state) after the uids of the bodies it holds. It is read under the
+world lock between ticks, or from a step callback as the tick stands. A
+32-byte header leads: `PJST`, a format version (1), the Jolt version id, the
+payload length and a 64-bit FNV-1a hash of the payload, integers in the
+machine's byte order.
+
+`restore_state(data)` raises `ValueError` when the header, length or hash do
+not match, before Jolt reads anything: Jolt trusts the counts in the state, so
+a truncated or damaged save would overrun its buffers. Only bytes
+`save_state` of this build wrote are read; the hash finds damage and is no
+defence against bytes made to match it. The restore is then a command: at the
+start of the tick that applies it the world takes the state back, so a
 lockstep world given the same batches afterwards repeats the run from the
-save. A world holding other bodies than the state names rejects it
-(`stats()['rejected']`). Characters, the tick count and queued batches are
-not part of the state.
+save. A world holding other bodies than the state names, or a state Jolt
+cannot read to its last byte, is rejected (`stats()['rejected']`) and the
+world keeps the state it had. Characters, the tick count and queued batches
+are not part of the state.
 
 ## Determinism and replay
 

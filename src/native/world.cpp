@@ -33,7 +33,7 @@ WorldCore::WorldCore(const WorldSettings &settings)
     if (!JPH::VerifyJoltVersionID())
         throw std::runtime_error("Jolt was built with options that differ from the binding's");
     temp_ = std::make_unique<JPH::TempAllocatorImplWithMallocFallback>(
-        settings.temp_allocator_mb * 1024u * 1024u);
+        JPH::uint(size_t(settings.temp_allocator_mb) << 20));
     if (settings.threads <= 1)
         jobs_ = std::make_unique<JPH::JobSystemSingleThreaded>(JPH::cMaxPhysicsJobs);
     else
@@ -67,7 +67,7 @@ WorldCore::WorldCore(const WorldSettings &settings)
     system_.SetBodyActivationListener(&collector_);
     row_of_index_.assign(settings.max_bodies, kNoRow);
     characters_ = std::make_unique<CharacterSystem>(system_, layers_, settings.threads);
-    vehicles_ = std::make_unique<VehicleSystem>(system_, dt_);
+    vehicles_ = std::make_unique<VehicleSystem>(system_, layers_, dt_);
     ragdolls_ = std::make_unique<RagdollSystem>(system_);
     soft_ = std::make_unique<SoftBodySystem>(system_);
 }
@@ -105,10 +105,46 @@ WorldCore::~WorldCore() {
 
 // -- commands ------------------------------------------------------------------
 
+namespace {
+
+// The collision keys a command asks layers for; consecutive equal keys appear once.
+std::vector<LayerKey> layer_keys(const Command &command) {
+    std::vector<LayerKey> keys;
+    auto put = [&](const LayerKey &key) {
+        if (keys.empty() || keys.back().tie() != key.tie())
+            keys.push_back(key);
+    };
+    auto bodies = [&](const AddBodies &add) {
+        for (size_t i = 0; i < add.shapes.size(); ++i)
+            put(LayerKey{add.group[i], add.mask[i], add.motion[i] != uint8_t(Motion::Static),
+                         (add.flags[i] & flag::kSensor) ? LayerRole::Sensor : LayerRole::Body, add.filter[i]});
+    };
+    if (auto *add = std::get_if<AddBodies>(&command))
+        bodies(*add);
+    else if (auto *swap = std::get_if<SwapBodies>(&command))
+        bodies(swap->add);
+    else if (auto *doll = std::get_if<AddRagdoll>(&command)) {
+        const double *p = doll->desc.params.data();
+        put(LayerKey{uint32_t(p[kRagGroup]), uint32_t(p[kRagMask]), true, LayerRole::Body, uint16_t(p[kRagFilter])});
+    } else if (auto *soft = std::get_if<AddSoftBody>(&command)) {
+        const double *p = soft->desc.params.data();
+        put(LayerKey{uint32_t(p[kSoftGroup]), uint32_t(p[kSoftMask]), true, LayerRole::Body,
+                     uint16_t(p[kSoftFilter])});
+    } else if (auto *character = std::get_if<AddCharacter>(&command)) {
+        if (character->proxy)
+            put(LayerKey{character->group, character->mask, true, LayerRole::Proxy, 0});
+    }
+    return keys;
+}
+
+}  // namespace
+
 uint64_t WorldCore::submit(Command &&command, uint64_t at_tick, Uid *first_uid, JointId *first_joint,
                           VehicleId *vehicle, RagdollId *ragdoll) {
     check();
     const uint32_t uid_count = uids_wanted(command);
+    if (uid_count)
+        layers_.check_room(layer_keys(command));
     if (uid_count) {
         const int64_t after = reserved_bodies_.fetch_add(uid_count) + uid_count;
         if (after > int64_t(settings_.max_bodies)) {
@@ -149,19 +185,24 @@ std::vector<uint64_t> WorldCore::drain_applied() {
 
 void WorldCore::start() {
     check();
-    std::lock_guard<std::mutex> joining(join_lock_);
     if (failed_.load())
-        throw CallbackFailed();
-    if (on_world_thread()) {
+        throw CallbackFailed(failure());
+    if (in_callback()) {
+        // From a callback the world free-runs from the next tick. A stop
+        // already asked for stands; nothing here waits for the thread.
         std::lock_guard<std::mutex> guard(control_);
+        if (mode_ == Mode::Lockstep)
+            cut_lockstep();
         mode_ = Mode::Free;
-        stopping_ = false;
         wake_.notify_all();
         return;
     }
+    std::lock_guard<std::mutex> joining(join_lock_);
     {
         std::unique_lock<std::mutex> guard(control_);
         if (running_ && !stopping_) {
+            if (mode_ == Mode::Lockstep)
+                cut_lockstep();
             mode_ = Mode::Free;
             wake_.notify_all();
             return;
@@ -177,49 +218,67 @@ void WorldCore::start() {
     thread_ = std::thread([self = shared_from_this()] { self->loop(); });
 }
 
-void WorldCore::stop() {
-    if (forked_.load())
+void WorldCore::cut_lockstep() {
+    if (wanted_ == 0)
         return;
+    wanted_ = 0;
+    ++cuts_;
+    done_.notify_all();
+}
+
+void WorldCore::request_stop() {
     {
         std::lock_guard<std::mutex> guard(control_);
         stopping_ = true;
         wake_.notify_all();
         done_.notify_all();
     }
-    {
-        std::lock_guard<std::mutex> guard(publish_lock_);
-        publish_cv_.notify_all();
-    }
-    if (on_world_thread())
+    std::lock_guard<std::mutex> guard(publish_lock_);
+    publish_cv_.notify_all();
+}
+
+// The flag is set and the thread joined under the join lock, so no run_ticks
+// or start can clear the flag and start a thread in between that this call
+// would then join for ever.
+void WorldCore::stop() {
+    if (forked_.load())
         return;
+    if (in_callback()) {
+        request_stop();
+        return;
+    }
     std::lock_guard<std::mutex> joining(join_lock_);
+    request_stop();
     if (thread_.joinable())
         thread_.join();
 }
 
+// From inside a callback, the thread that runs it cannot be joined, and a
+// thread joining the world thread (stop_all_worlds at exit) may hold the join
+// lock: the stop is asked for and the thread, which holds its own reference
+// to the world, ends after the tick and detaches itself in ~WorldCore.
 void WorldCore::shutdown() {
-    if (!on_world_thread()) {
-        stop();
+    if (in_callback()) {
+        request_stop();
         return;
     }
     stop();
-    std::lock_guard<std::mutex> joining(join_lock_);
-    if (thread_.joinable())
-        thread_.detach();
 }
 
 void WorldCore::run_ticks(uint64_t count) {
     check();
+    if (in_callback_job())
+        throw std::runtime_error("run_ticks cannot be called from the contact filter, which runs inside the step");
     if (on_world_thread())
         throw std::runtime_error("run_ticks cannot be called from the world thread");
     if (failed_.load())
-        throw CallbackFailed();
+        throw CallbackFailed(failure());
     if (count == 0 || run_quiet(count))
         return;
+    uint64_t cuts = 0;
     {
         std::lock_guard<std::mutex> joining(join_lock_);
         std::unique_lock<std::mutex> guard(control_);
-        mode_ = Mode::Lockstep;
         if (!running_ || stopping_) {
             guard.unlock();
             if (thread_.joinable())
@@ -229,13 +288,19 @@ void WorldCore::run_ticks(uint64_t count) {
             running_ = true;
             thread_ = std::thread([self = shared_from_this()] { self->loop(); });
         }
+        // Set after the join: a callback of the thread being joined may still
+        // call start() and switch the mode.
+        mode_ = Mode::Lockstep;
         wanted_ += count;
+        cuts = cuts_;
         wake_.notify_all();
     }
     std::unique_lock<std::mutex> guard(control_);
     done_.wait(guard, [&] { return wanted_ == 0 || stopping_; });
     if (failed_.load())
-        throw CallbackFailed();
+        throw CallbackFailed(failure());
+    if (cuts_ != cuts)
+        throw WorldStopped("start() switched the world to free-running before the ticks ran");
     if (wanted_ != 0) {
         wanted_ = 0;
         throw WorldStopped();
@@ -277,6 +342,8 @@ bool WorldCore::run_quiet(uint64_t count) {
 
 bool WorldCore::wait_tick(uint64_t tick, double timeout) {
     check();
+    if (in_callback_job())
+        throw std::runtime_error("wait_tick cannot be called from the contact filter, which runs inside the step");
     if (on_world_thread())
         throw std::runtime_error("wait_tick cannot be called from the world thread");
     std::unique_lock<std::mutex> guard(publish_lock_);
@@ -291,7 +358,7 @@ bool WorldCore::wait_tick(uint64_t tick, double timeout) {
     else
         publish_cv_.wait_for(guard, std::chrono::duration<double>(timeout), reached);
     if (failed_.load())
-        throw CallbackFailed();
+        throw CallbackFailed(failure());
     return published_ && published_->tick >= tick;
 }
 
@@ -373,7 +440,16 @@ void WorldCore::loop() {
             mode = mode_;
             last = mode;
         }
-        const bool ok = tick_once();
+        // Nothing thrown may leave the thread, where std::terminate would end
+        // the process: the world stops with the message instead.
+        bool ok = false;
+        try {
+            ok = tick_once();
+        } catch (const std::exception &error) {
+            fail_native(std::string("the world thread failed: ") + error.what());
+        } catch (...) {
+            fail_native("the world thread failed with an exception that is not a std::exception");
+        }
         std::unique_lock<std::mutex> guard(control_);
         if (!ok) {
             stopping_ = true;
@@ -408,6 +484,8 @@ void WorldCore::loop() {
 
 // -- one tick ----------------------------------------------------------------------
 
+// The thread detaches whatever the body throws: a C++ exception (a failed
+// cast, an allocation) stops the world as a Python one does.
 template <typename Body> bool WorldCore::call_python(Body &&body) {
     if (!python_.attach())
         return true;
@@ -417,6 +495,9 @@ template <typename Body> bool WorldCore::call_python(Body &&body) {
     } catch (nb::python_error &error) {
         fail(error);
         ok = false;
+    } catch (const std::exception &error) {
+        fail_native(std::string("the world thread failed in a callback: ") + error.what());
+        ok = false;
     }
     python_.detach();
     return ok;
@@ -425,23 +506,47 @@ template <typename Body> bool WorldCore::call_python(Body &&body) {
 void WorldCore::fail(nb::python_error &error) {
     nb::object exception = nb::borrow(error.value());
     {
+        // Once the World is gone (clear_python) nothing may be kept: the last
+        // reference would be dropped by ~WorldCore with no thread state.
         std::lock_guard<std::mutex> guard(error_lock_);
-        error_ = exception;
+        if (!python_cleared_)
+            error_ = exception;
     }
     failed_ = true;
     try {
-        nb::module_::import_("logging")
-            .attr("getLogger")("pyjoltphysics")
-            .attr("error")("a world callback raised; the world has stopped",
-                           nb::arg("exc_info") = exception);
+        callback_logger().attr("error")("a world callback raised; the world has stopped",
+                                        nb::arg("exc_info") = exception);
     } catch (nb::python_error &logging_error) {
         logging_error.discard_as_unraisable("logging a pyjoltphysics callback error");
     }
 }
 
+void WorldCore::fail_native(const std::string &message) {
+    {
+        std::lock_guard<std::mutex> guard(error_lock_);
+        if (native_error_.empty())
+            native_error_ = message;
+    }
+    failed_ = true;
+}
+
+std::string WorldCore::failure() const {
+    std::lock_guard<std::mutex> guard(error_lock_);
+    return native_error_.empty() ? CallbackFailed().what() : native_error_ + "; the world has stopped";
+}
+
+std::string WorldCore::last_rejection() const {
+    std::lock_guard<std::mutex> guard(error_lock_);
+    return last_rejection_;
+}
+
 nb::object WorldCore::error() const {
     std::lock_guard<std::mutex> guard(error_lock_);
-    return error_.is_valid() ? error_ : nb::none();
+    if (error_.is_valid())
+        return error_;
+    if (!native_error_.empty())
+        return nb::handle(PyExc_RuntimeError)(nb::str(native_error_.c_str()));
+    return nb::none();
 }
 
 void WorldCore::poke() {
@@ -461,6 +566,7 @@ void WorldCore::clear_python() {
     callbacks_.clear();
     nb::object old;
     std::lock_guard<std::mutex> guard(error_lock_);
+    python_cleared_ = true;
     old = std::move(error_);
 }
 
@@ -538,7 +644,14 @@ bool WorldCore::apply_due(uint64_t index, std::vector<Batch> &due) {
     due.clear();
     queue_.take_due(index, due);
     for (Batch &batch : due) {
-        apply(batch, index);
+        // A batch that throws (std::bad_alloc) is rejected and the world goes on.
+        try {
+            apply(batch, index);
+        } catch (const std::exception &error) {
+            ++rejected_;
+            std::lock_guard<std::mutex> guard(error_lock_);
+            last_rejection_ = error.what();
+        }
         note_applied(batch.seq);
     }
     characters_->flush_events(tick_events_);
@@ -554,6 +667,8 @@ bool WorldCore::apply_due(uint64_t index, std::vector<Batch> &due) {
 
 void WorldCore::flush() {
     check();
+    if (in_callback_job())
+        throw std::runtime_error("flush cannot be called from the contact filter, which runs inside the step");
     if (on_world_thread())
         return;
     std::unique_lock<WorldLock> exclusive(world_lock_);
@@ -633,6 +748,13 @@ bool WorldCore::tick_once() {
     const auto t4 = Clock::now();
     publish(tick);
     const auto t5 = Clock::now();
+    // A body whose pose or velocity overflowed a float spreads NaN to every
+    // body it meets: the world stops, naming it.
+    if (nonfinite_ != kNoBody) {
+        fail_native("body " + std::to_string(nonfinite_) + " has a position or velocity that is not finite after tick " +
+                    std::to_string(tick));
+        return false;
+    }
     const auto c0 = Clock::now();
     const bool ok = run_python_after(tick);
     python_s += seconds(Clock::now() - c0);
@@ -695,6 +817,10 @@ void WorldCore::publish(uint64_t tick) {
             angular[2] = w.GetZ();
             out.awake[row] = body->IsActive() ? 1 : 0;
             out.motion[row] = uint8_t(body->GetMotionType());
+            if (nonfinite_ == kNoBody &&
+                !(std::isfinite(position[0] + position[1] + position[2]) &&
+                  std::isfinite(linear[0] + linear[1] + linear[2] + angular[0] + angular[1] + angular[2])))
+                nonfinite_ = entry.uid;
         });
     characters_->write(*buffer);
     write_joints(*buffer);
@@ -712,10 +838,11 @@ void WorldCore::publish(uint64_t tick) {
 
 namespace {
 
-// Marks the calling thread as inside the contact filter while it calls Python.
+// Marks the calling thread as inside a world's contact filter while it calls Python.
 struct InContactFilter {
-    InContactFilter() { in_contact_filter = true; }
-    ~InContactFilter() { in_contact_filter = false; }
+    explicit InContactFilter(const WorldCore *world) : outer(filtering_world) { filtering_world = world; }
+    ~InContactFilter() { filtering_world = outer; }
+    const void *outer;
 };
 
 }  // namespace
@@ -768,7 +895,7 @@ bool WorldCore::solve_pair(const JPH::Body &body1, const JPH::Body &body2, JPH::
         PyEval_RestoreThread(state);
     }
     {
-        InContactFilter inside;
+        InContactFilter inside(this);
         try {
             nb::object fn;
             {
@@ -782,6 +909,8 @@ bool WorldCore::solve_pair(const JPH::Body &body1, const JPH::Body &body2, JPH::
             }
         } catch (nb::python_error &error) {
             fail(error);
+        } catch (const std::exception &error) {
+            fail_native(std::string("the world thread failed in the contact filter: ") + error.what());
         }
     }
     if (world_thread)

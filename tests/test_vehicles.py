@@ -782,3 +782,20 @@ def test_a_tracked_vehicle_needs_wheels_on_both_tracks(make_world: MakeWorld) ->
     world.add_vehicle(int(uids[0]), one_sided)
     world.run_ticks(1)
     assert len(latest(world).vehicles) == 0 and world.stats()['rejected'] == 1
+
+
+def test_a_parked_car_with_downforce_falls_asleep(make_world: MakeWorld) -> None:
+    """The chassis forces never wake it: a car left alone sleeps, and a throttle wakes it."""
+    world = make_world(threads=2)
+    world.add_bodies(floor())
+    chassis = _chassis(world, (0.0, 0.8, 0.0))
+    assert car_settings().downforce > 0.0
+    car = world.add_vehicle(chassis, car_settings())
+    world.run_ticks(5 * 120)
+    snapshot = latest(world)
+    assert not snapshot.awake[snapshot.rows[chassis]]
+    car.set_input(throttle=1.0)
+    world.run_ticks(60)
+    snapshot = latest(world)
+    assert snapshot.awake[snapshot.rows[chassis]]
+    assert abs(snapshot.position[snapshot.rows[chassis], 2]) > 0.05

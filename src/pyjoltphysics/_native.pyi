@@ -496,6 +496,12 @@ class World:
     def error(self) -> object: ...
 
     @property
+    def last_rejection(self) -> str | None:
+        """
+        Why the world could not apply the last batch whose apply raised; None when none has.
+        """
+
+    @property
     def tick(self) -> int: ...
 
     @property

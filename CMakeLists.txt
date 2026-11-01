@@ -121,13 +121,16 @@ if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
 endif()
 
 # A sanitizer build for the test suite: -DPYJOLTPHYSICS_SANITIZE=ON compiles
-# the module and Jolt with AddressSanitizer and UndefinedBehaviorSanitizer.
-# The interpreter then needs libasan preloaded (see tox -e asan).
-option(PYJOLTPHYSICS_SANITIZE "Build with -fsanitize=address,undefined" OFF)
+# the module and Jolt with AddressSanitizer and UndefinedBehaviorSanitizer,
+# including the float-to-integer conversions that overflow their type, which
+# -fsanitize=undefined leaves out. The interpreter then needs libasan
+# preloaded (see tox -e asan).
+option(PYJOLTPHYSICS_SANITIZE "Build with -fsanitize=address,undefined,float-cast-overflow" OFF)
 if(PYJOLTPHYSICS_SANITIZE)
+  set(PYJOLTPHYSICS_SANITIZERS "-fsanitize=address,undefined,float-cast-overflow")
   foreach(target _native Jolt)
-    target_compile_options(${target} PRIVATE -fsanitize=address,undefined -fno-omit-frame-pointer)
-    target_link_options(${target} PRIVATE -fsanitize=address,undefined)
+    target_compile_options(${target} PRIVATE ${PYJOLTPHYSICS_SANITIZERS} -fno-omit-frame-pointer)
+    target_link_options(${target} PRIVATE ${PYJOLTPHYSICS_SANITIZERS})
   endforeach()
 endif()
 

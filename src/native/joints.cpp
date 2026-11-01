@@ -213,7 +213,8 @@ void WorldCore::apply(AddJoints &add, uint64_t) {
         }
         JPH::Body *a = ra ? locks.TryGetBody(ra->id) : &JPH::Body::sFixedToWorld;
         JPH::Body *b = locks.TryGetBody(rb->id);
-        if (a == nullptr || b == nullptr) {
+        // Jolt's two-body constraints join rigid bodies; a soft body takes pins instead.
+        if (a == nullptr || b == nullptr || (ra && !a->IsRigidBody()) || !b->IsRigidBody()) {
             ++rejected_;
             continue;
         }

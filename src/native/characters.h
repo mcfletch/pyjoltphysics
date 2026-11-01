@@ -133,7 +133,8 @@ public:
     CharacterSystem &operator=(const CharacterSystem &) = delete;
 
     // On the world thread with the world lock held exclusively.
-    void add(const AddCharacter &add, JPH::ObjectLayer proxy_layer, JPH::TempAllocator &temp);
+    // Whether it made the character a proxy body on `proxy_layer`.
+    bool add(const AddCharacter &add, JPH::ObjectLayer proxy_layer, JPH::TempAllocator &temp);
     // Returns the proxy bodies of the characters removed, for the world to remove.
     std::vector<JPH::BodyID> remove(const std::vector<Uid> &uids);
     // False for an op naming no character.

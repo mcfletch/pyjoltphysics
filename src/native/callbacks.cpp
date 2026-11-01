@@ -26,7 +26,18 @@ void mark_interpreter_exiting() { exiting = true; }
 
 bool python_available() { return !finalizing(); }
 
-thread_local bool in_contact_filter = false;
+thread_local const void *filtering_world = nullptr;
+
+namespace {
+PyObject *logger = nullptr;  // a reference kept for the life of the process
+}
+
+void keep_callback_logger() {
+    if (logger == nullptr)
+        logger = nb::module_::import_("logging").attr("getLogger")("pyjoltphysics").release().ptr();
+}
+
+nb::handle callback_logger() { return logger; }
 
 PythonThread::PythonThread() : interpreter_(PyInterpreterState_Get()) {}
 

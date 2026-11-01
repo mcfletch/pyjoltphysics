@@ -22,6 +22,7 @@ from typing import Any
 import numpy as np
 import numpy.typing as npt
 
+from pyjoltphysics._checks import whole_numbers
 from pyjoltphysics.enums import BodyFlag, MotionType, ShapeKind
 from pyjoltphysics.shapes import Shape
 
@@ -36,7 +37,11 @@ _ALL_GROUPS = 0xFFFFFFFF
 
 
 def _rows(value: ArrayLike, count: int, width: int, dtype: type, name: str) -> np.ndarray:
-    array: np.ndarray = np.asarray(value, dtype=dtype)
+    array: np.ndarray = (
+        whole_numbers(value, dtype, name)
+        if np.issubdtype(dtype, np.integer)
+        else np.asarray(value, dtype=dtype)
+    )
     if array.ndim == 1 and width > 1:
         array = np.broadcast_to(array, (count, width))
     elif array.ndim == 0 and width == 1:

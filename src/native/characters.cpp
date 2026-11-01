@@ -720,7 +720,7 @@ void push_each_other(const std::vector<Character *> &members) {
 
 }  // namespace
 
-void CharacterSystem::add(const AddCharacter &add, JPH::ObjectLayer proxy_layer, JPH::TempAllocator &temp) {
+bool CharacterSystem::add(const AddCharacter &add, JPH::ObjectLayer proxy_layer, JPH::TempAllocator &temp) {
     auto made = std::make_unique<Character>(layers_, add.group, add.mask);
     Character &c = *made;
     c.id = add.uid;
@@ -763,7 +763,9 @@ void CharacterSystem::add(const AddCharacter &add, JPH::ObjectLayer proxy_layer,
     }
     auto at = std::lower_bound(characters_.begin(), characters_.end(), c.id,
                                [](const std::unique_ptr<Character> &x, Uid v) { return x->id < v; });
+    const bool proxy = !made->proxy.IsInvalid();
     characters_.insert(at, std::move(made));
+    return proxy;
 }
 
 std::vector<JPH::BodyID> CharacterSystem::remove(const std::vector<Uid> &uids) {

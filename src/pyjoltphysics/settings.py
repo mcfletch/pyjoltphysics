@@ -8,6 +8,13 @@ from typing import Any
 
 __all__ = ['WorldSettings']
 
+#: The tick rates a world steps at, Hz.
+MIN_TICK_HZ = 1.0
+MAX_TICK_HZ = 10000.0
+#: Jolt sizes its scratch allocator in a 32-bit byte count.
+MAX_TEMP_ALLOCATOR_MB = 4095
+_FLOAT_MAX = 3.4028234663852886e38
+
 
 @dataclasses.dataclass(frozen=True)
 class WorldSettings:
@@ -17,7 +24,7 @@ class WorldSettings:
     threads including the world thread; 1 steps on the world thread alone.
     """
 
-    #: Ticks a second, each one step of ``1 / tick_hz`` seconds.
+    #: Ticks a second, each one step of ``1 / tick_hz`` seconds; 1 to 10000.
     tick_hz: float = 120.0
     #: Seconds a free-running world may fall behind its schedule before it
     #: drops ticks (counted in ``stats()['dropped_ticks']``), so simulated time
@@ -40,8 +47,8 @@ class WorldSettings:
     #: m/s of closing speed below which a contact does not bounce.
     min_velocity_for_restitution: float = 1.0
     collision_steps: int = 1
-    #: Megabytes Jolt allocates up front for one step's scratch memory; a step
-    #: that needs more allocates the rest from the heap.
+    #: Megabytes Jolt allocates up front for one step's scratch memory, 0 to
+    #: 4095; a step that needs more allocates the rest from the heap.
     temp_allocator_mb: int = 16
     #: m/s of sliding at a contact below which a material's static friction
     #: holds; above it the dynamic friction acts.
@@ -55,12 +62,21 @@ class WorldSettings:
     angular_damping: float = 0.0
 
     def __post_init__(self) -> None:
-        if not (math.isfinite(self.tick_hz) and self.tick_hz > 0):
-            raise ValueError('tick_hz is positive, not %r' % (self.tick_hz,))
+        if not (MIN_TICK_HZ <= self.tick_hz <= MAX_TICK_HZ):
+            raise ValueError(
+                'tick_hz is from %g to %g, not %r' % (MIN_TICK_HZ, MAX_TICK_HZ, self.tick_hz)
+            )
+        if not (0 <= self.temp_allocator_mb <= MAX_TEMP_ALLOCATOR_MB):
+            raise ValueError(
+                'temp_allocator_mb is from 0 to %d, not %r'
+                % (MAX_TEMP_ALLOCATOR_MB, self.temp_allocator_mb)
+            )
         if self.threads < 1:
             raise ValueError('threads is at least 1, not %r' % (self.threads,))
         if len(self.gravity) != 3:
             raise ValueError('gravity has three components')
+        if not all(math.isfinite(g) and abs(g) <= _FLOAT_MAX for g in self.gravity):
+            raise ValueError('gravity is finite as 32-bit floats, not %r' % (self.gravity,))
 
     @property
     def dt(self) -> float:

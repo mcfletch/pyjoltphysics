@@ -75,28 +75,30 @@ void WorldCore::apply(AddBodies &add, uint64_t) {
     made.reserve(count);
     std::vector<JPH::BodyID> sensors;
     size_t statics = 0;
-    // Consecutive rows usually share their collision triple.
-    uint32_t last_group = 0, last_mask = 0;
-    uint16_t last_filter = 0;
-    bool last_moving = false, last_sensor = false, have_layer = false;
-    JPH::ObjectLayer layer = 0;
+    // Consecutive rows usually share their collision key. Each body holds one
+    // use of its layer; a row with no layer to be had is rejected.
+    LayerKey last;
+    bool have_layer = false;
+    JPH::ObjectLayer layer = CollisionLayers::kNoLayer;
     for (size_t i = 0; i < count; ++i) {
         const auto motion = static_cast<Motion>(add.motion[i]);
         const uint32_t flags = add.flags[i];
         const JPH::Shape *shape = add.shapes[i].GetPtr();
         const bool moving = motion != Motion::Static;
         const bool sensor = (flags & flag::kSensor) != 0;
-        const uint16_t filter = add.filter[i];
-        if (!have_layer || add.group[i] != last_group || add.mask[i] != last_mask ||
-            moving != last_moving || sensor != last_sensor || filter != last_filter) {
-            layer = layers_.layer(add.group[i], add.mask[i], moving, sensor ? LayerRole::Sensor : LayerRole::Body,
-                                  filter);
-            last_group = add.group[i];
-            last_mask = add.mask[i];
-            last_filter = filter;
-            last_moving = moving;
-            last_sensor = sensor;
+        const LayerKey key{add.group[i], add.mask[i], moving, sensor ? LayerRole::Sensor : LayerRole::Body,
+                           add.filter[i]};
+        if (!have_layer || key.tie() != last.tie()) {
+            layer = layers_.acquire(key);
+            last = key;
             have_layer = true;
+        } else if (layer != CollisionLayers::kNoLayer) {
+            layers_.retain(layer);
+        }
+        if (layer == CollisionLayers::kNoLayer) {
+            ++rejected_;
+            reserved_bodies_ -= 1;
+            continue;
         }
         JPH::BodyCreationSettings settings(shape, rvec3(add.position, i), quat(add.orientation, i),
                                            to_jolt(motion), layer);
@@ -138,6 +140,8 @@ void WorldCore::apply(AddBodies &add, uint64_t) {
         JPH::Body *body = bodies.CreateBody(settings);
         if (body == nullptr) {
             ++rejected_;
+            reserved_bodies_ -= 1;
+            layers_.release(layer);
             continue;
         }
         made.push_back(body->GetID());
@@ -200,6 +204,17 @@ void WorldCore::apply(RemoveBodies &remove, uint64_t index) {
     }
     if (ids.empty())
         return;
+    leave(ids, uids, index);
+    destroy(ids);
+    reserved_bodies_ -= int64_t(ids.size());
+    applied_bodies_ -= ids.size();
+}
+
+// Everything in the world that names a body goes before the body: the
+// vehicles on it, soft bodies and their pins to it, joints, drag, tracks,
+// contact pairs and its layer's use. remove_bodies and remove_ragdolls both
+// come through here, so a body leaves the same way whichever removes it.
+void WorldCore::leave(const std::vector<JPH::BodyID> &ids, const std::vector<Uid> &uids, uint64_t index) {
     const size_t soft_before = soft_->size();
     soft_->remove(uids);
     applied_soft_ -= soft_before - soft_->size();
@@ -207,18 +222,22 @@ void WorldCore::apply(RemoveBodies &remove, uint64_t index) {
     vehicles_->remove_chassis(uids);
     applied_vehicles_ -= vehicles_before - vehicles_->size();
     remove_joints_of(uids, index);
+    const JPH::BodyLockInterfaceNoLock &locks = system_.GetBodyLockInterfaceNoLock();
     for (size_t i = 0; i < ids.size(); ++i) {
         fields_.drag.erase(ids[i].GetIndex());
         tracks_.erase(uids[i]);
+        if (const JPH::Body *body = locks.TryGetBody(ids[i]))
+            layers_.release(body->GetObjectLayer());
     }
     pairs_.remove_bodies(ids, uint32_t(index + 1), tick_events_);
+}
+
+void WorldCore::destroy(std::vector<JPH::BodyID> ids) {
     JPH::BodyInterface &bodies = system_.GetBodyInterfaceNoLock();
     collector_.quiet = true;
     bodies.RemoveBodies(ids.data(), int(ids.size()));
     collector_.quiet = false;
     bodies.DestroyBodies(ids.data(), int(ids.size()));
-    reserved_bodies_ -= int64_t(ids.size());
-    applied_bodies_ -= ids.size();
 }
 
 void WorldCore::apply(SetTransforms &set, uint64_t) {
@@ -330,7 +349,14 @@ void WorldCore::apply(SetMotionTypes &set, uint64_t) {
             continue;
         }
         const bool moving = motion != Motion::Static;
-        bodies.SetObjectLayer(row->id, layers_.with_motion(body->GetObjectLayer(), moving));
+        const JPH::ObjectLayer old = body->GetObjectLayer();
+        const JPH::ObjectLayer layer = layers_.with_motion(old, moving);
+        if (layer == CollisionLayers::kNoLayer) {
+            ++rejected_;
+            continue;
+        }
+        bodies.SetObjectLayer(row->id, layer);
+        layers_.release(old);
         bodies.SetMotionType(row->id, to_jolt(motion),
                              moving ? JPH::EActivation::Activate : JPH::EActivation::DontActivate);
         publisher_.mark(row_of_uid_[set.uids[i]]);
@@ -354,10 +380,20 @@ void WorldCore::apply(SwapBodies &swap, uint64_t index) {
 }
 
 void WorldCore::apply(AddCharacter &add, uint64_t) {
-    const JPH::ObjectLayer layer = layers_.layer(add.group, add.mask, true, LayerRole::Proxy);
+    JPH::ObjectLayer layer = CollisionLayers::kNoLayer;
+    if (add.proxy) {
+        layer = layers_.acquire(add.group, add.mask, true, LayerRole::Proxy);
+        if (layer == CollisionLayers::kNoLayer) {
+            ++rejected_;
+            reserved_bodies_ -= 1;
+            return;
+        }
+    }
     collector_.quiet = true;
-    characters_->add(add, layer, *temp_);
+    const bool proxy = characters_->add(add, layer, *temp_);
     collector_.quiet = false;
+    if (layer != CollisionLayers::kNoLayer && !proxy)
+        layers_.release(layer);
     ++applied_characters_;
 }
 
@@ -365,11 +401,11 @@ void WorldCore::remove_proxies(std::vector<JPH::BodyID> ids, uint64_t index) {
     if (ids.empty())
         return;
     pairs_.remove_bodies(ids, uint32_t(index + 1), tick_events_);
-    JPH::BodyInterface &bodies = system_.GetBodyInterfaceNoLock();
-    collector_.quiet = true;
-    bodies.RemoveBodies(ids.data(), int(ids.size()));
-    collector_.quiet = false;
-    bodies.DestroyBodies(ids.data(), int(ids.size()));
+    const JPH::BodyLockInterfaceNoLock &locks = system_.GetBodyLockInterfaceNoLock();
+    for (const JPH::BodyID &id : ids)
+        if (const JPH::Body *body = locks.TryGetBody(id))
+            layers_.release(body->GetObjectLayer());
+    destroy(ids);
 }
 
 void WorldCore::apply(RemoveCharacters &remove, uint64_t index) {
@@ -405,7 +441,14 @@ void WorldCore::apply(SetBodyFilters &set, uint64_t) {
         const Row *row = find(set.uids[i]);
         if (row == nullptr)
             continue;
-        bodies.SetObjectLayer(row->id, layers_.with_filter(bodies.GetObjectLayer(row->id), set.filter[i]));
+        const JPH::ObjectLayer old = bodies.GetObjectLayer(row->id);
+        const JPH::ObjectLayer layer = layers_.with_filter(old, set.filter[i]);
+        if (layer == CollisionLayers::kNoLayer) {
+            ++rejected_;
+            continue;
+        }
+        bodies.SetObjectLayer(row->id, layer);
+        layers_.release(old);
         if (bodies.GetMotionType(row->id) != JPH::EMotionType::Static)
             bodies.ActivateBody(row->id);
     }
@@ -576,35 +619,106 @@ void WorldCore::apply(SetFlags &set, uint64_t) {
     }
 }
 
+// -- saved state ----------------------------------------------------------------------
+//
+// save_state's bytes: a 32-byte header, then the payload.
+//   0  "PJST"
+//   4  uint32  format version (kStateVersion)
+//   8  uint64  JPH_VERSION_ID of the Jolt build that wrote it
+//  16  uint64  payload length in bytes
+//  24  uint64  FNV-1a 64-bit hash of the payload
+//  32  payload: uint64 row count, a uint32 uid per row in row order, then
+//      Jolt's PhysicsSystem::SaveState stream
+// Integers are in the machine's byte order. Jolt trusts the counts in its
+// stream, so nothing reaches it until the header, length and hash match.
+
+namespace {
+
+constexpr char kStateMagic[4] = {'P', 'J', 'S', 'T'};
+constexpr uint32_t kStateVersion = 1;
+constexpr size_t kStateHeader = 32;
+// JPH_VERSION_ID names Jolt's integer types unqualified.
+constexpr uint64_t kJoltVersion = [] {
+    using namespace JPH;
+    return uint64_t(JPH_VERSION_ID);
+}();
+
+uint64_t fnv1a(const char *data, size_t size) {
+    uint64_t hash = 0xcbf29ce484222325ull;
+    for (size_t i = 0; i < size; ++i) {
+        hash ^= uint8_t(data[i]);
+        hash *= 0x100000001b3ull;
+    }
+    return hash;
+}
+
+template <typename T> T read_at(const std::string &data, size_t offset) {
+    T value;
+    std::memcpy(&value, data.data() + offset, sizeof(T));
+    return value;
+}
+
+}  // namespace
+
+std::string state_problem(const std::string &data) {
+    if (data.size() < kStateHeader || std::memcmp(data.data(), kStateMagic, sizeof(kStateMagic)) != 0)
+        return "the bytes are not a pyjoltphysics saved state";
+    if (read_at<uint32_t>(data, 4) != kStateVersion)
+        return "the state was saved in format " + std::to_string(read_at<uint32_t>(data, 4)) + "; this build reads " +
+               std::to_string(kStateVersion);
+    if (read_at<uint64_t>(data, 8) != kJoltVersion)
+        return "the state was saved by another build of Jolt";
+    const uint64_t length = read_at<uint64_t>(data, 16);
+    if (length != data.size() - kStateHeader)
+        return "the state holds " + std::to_string(data.size() - kStateHeader) + " payload bytes where its header says " +
+               std::to_string(length);
+    if (read_at<uint64_t>(data, 24) != fnv1a(data.data() + kStateHeader, data.size() - kStateHeader))
+        return "the state's bytes do not match its hash";
+    if (length < sizeof(uint64_t))
+        return "the state holds no row count";
+    const uint64_t count = read_at<uint64_t>(data, kStateHeader);
+    if (count > (length - sizeof(uint64_t)) / sizeof(Uid))
+        return "the state's row count is larger than its bytes";
+    return {};
+}
+
 void WorldCore::apply(RestoreState &restore, uint64_t) {
-    // The state begins with the uids of the bodies it holds, in row order; a
-    // world holding other bodies cannot take it.
+    // The binding checked the header; the world must hold the bodies the
+    // state holds, in the same rows.
     const std::string &data = *restore.data;
-    uint64_t count = 0;
-    if (data.size() < sizeof(count)) {
+    if (!state_problem(data).empty()) {
         ++rejected_;
         return;
     }
-    std::memcpy(&count, data.data(), sizeof(count));
-    const size_t header = sizeof(count) + count * sizeof(Uid);
-    if (data.size() < header || count != rows_.size()) {
+    const auto count = read_at<uint64_t>(data, kStateHeader);
+    if (count != rows_.size()) {
         ++rejected_;
         return;
     }
-    for (size_t i = 0; i < count; ++i) {
-        Uid uid = 0;
-        std::memcpy(&uid, data.data() + sizeof(count) + i * sizeof(Uid), sizeof(uid));
-        if (uid != rows_[i].uid) {
+    const size_t uids_at = kStateHeader + sizeof(uint64_t);
+    for (size_t i = 0; i < count; ++i)
+        if (read_at<Uid>(data, uids_at + i * sizeof(Uid)) != rows_[i].uid) {
             ++rejected_;
             return;
         }
-    }
+    const size_t jolt_at = uids_at + count * sizeof(Uid);
+    // Jolt's RestoreState is not undone when it fails part way; the state
+    // before it is put back.
+    JPH::StateRecorderImpl before;
+    system_.SaveState(before);
     JPH::StateRecorderImpl recorder;
-    recorder.WriteBytes(data.data() + header, data.size() - header);
+    recorder.WriteBytes(data.data() + jolt_at, data.size() - jolt_at);
     recorder.Rewind();
-    if (!system_.RestoreState(recorder)) {
+    bool ok = system_.RestoreState(recorder) && !recorder.IsFailed();
+    if (ok) {
+        char extra;
+        recorder.ReadBytes(&extra, 1);
+        ok = recorder.IsEOF();  // nothing left over
+    }
+    if (!ok) {
         ++rejected_;
-        return;
+        before.Rewind();
+        system_.RestoreState(before);
     }
     for (uint32_t row = 0; row < rows_.size(); ++row)
         publisher_.mark(row);
@@ -612,15 +726,31 @@ void WorldCore::apply(RestoreState &restore, uint64_t) {
 
 std::string WorldCore::save_state() {
     check();
-    std::unique_lock<WorldLock> exclusive(world_lock_);
+    if (in_callback_job())
+        throw std::runtime_error("save_state cannot be called from the contact filter, which runs inside the step");
+    // A step callback on the world thread runs under the shared world lock its
+    // tick holds, so nothing writes the world while it reads.
+    std::unique_lock<WorldLock> exclusive(world_lock_, std::defer_lock);
+    if (!on_world_thread())
+        exclusive.lock();
     JPH::StateRecorderImpl recorder;
     system_.SaveState(recorder);
+    const std::string jolt = recorder.GetData();
     const uint64_t count = rows_.size();
-    std::string out(sizeof(count) + count * sizeof(Uid), '\0');
-    std::memcpy(out.data(), &count, sizeof(count));
+    const size_t length = sizeof(count) + count * sizeof(Uid) + jolt.size();
+    std::string out(kStateHeader + length, '\0');
+    char *payload = out.data() + kStateHeader;
+    std::memcpy(payload, &count, sizeof(count));
     for (size_t i = 0; i < count; ++i)
-        std::memcpy(out.data() + sizeof(count) + i * sizeof(Uid), &rows_[i].uid, sizeof(Uid));
-    return out + recorder.GetData();
+        std::memcpy(payload + sizeof(count) + i * sizeof(Uid), &rows_[i].uid, sizeof(Uid));
+    std::memcpy(payload + sizeof(count) + count * sizeof(Uid), jolt.data(), jolt.size());
+    const uint64_t version = kJoltVersion, size = length, hash = fnv1a(payload, length);
+    std::memcpy(out.data(), kStateMagic, sizeof(kStateMagic));
+    std::memcpy(out.data() + 4, &kStateVersion, sizeof(kStateVersion));
+    std::memcpy(out.data() + 8, &version, sizeof(version));
+    std::memcpy(out.data() + 16, &size, sizeof(size));
+    std::memcpy(out.data() + 24, &hash, sizeof(hash));
+    return out;
 }
 
 // -- vehicles ----------------------------------------------------------------------
@@ -663,15 +793,23 @@ void WorldCore::apply(SetSurfaceTable &set, uint64_t) {
 void WorldCore::apply(AddRagdoll &add, uint64_t) {
     const RagdollDesc &desc = add.desc;
     const double *p = desc.params.data();
-    const JPH::ObjectLayer layer = layers_.layer(uint32_t(p[kRagGroup]), uint32_t(p[kRagMask]), true,
-                                                 LayerRole::Body, uint16_t(p[kRagFilter]));
+    // The binding checked the group, mask and filter fit their types.
+    const auto bones = uint32_t(desc.uids.size());
+    const JPH::ObjectLayer layer = layers_.acquire(uint32_t(p[kRagGroup]), uint32_t(p[kRagMask]), true,
+                                                   LayerRole::Body, uint16_t(p[kRagFilter]), bones);
+    if (layer == CollisionLayers::kNoLayer) {
+        ++rejected_;
+        reserved_bodies_ -= int64_t(bones);
+        return;
+    }
     if (joint_filter_ == nullptr)
         joint_filter_ = new JointPairFilter;
     std::vector<std::pair<int, int>> pairs;
     Ragdoll *doll = ragdolls_->add(desc, layer, joint_filter_, pairs, time_);
     if (doll == nullptr) {
         ++rejected_;
-        reserved_bodies_ -= int64_t(desc.uids.size());
+        reserved_bodies_ -= int64_t(bones);
+        layers_.release(layer, bones);
         return;
     }
     for (const auto &[a, b] : pairs)
@@ -690,8 +828,7 @@ void WorldCore::remove_ragdoll(RagdollId id, uint64_t index) {
     if (!ragdolls_->owns_ragdoll(id))
         return;
     ragdolls_->bodies_of(id, ids, uids);
-    remove_joints_of(uids, index);
-    pairs_.remove_bodies(ids, uint32_t(index + 1), tick_events_);
+    leave(ids, uids, index);
     for (Uid uid : uids)
         unbind_row(uid);
     collector_.quiet = true;
@@ -740,10 +877,16 @@ void WorldCore::apply(AddSoftBody &add, uint64_t index) {
     settings.mSettings = desc.shared;
     settings.mPosition = JPH::RVec3(p[kSoftX], p[kSoftY], p[kSoftZ]);
     settings.mRotation = JPH::Quat(float(p[kSoftQX]), float(p[kSoftQY]), float(p[kSoftQZ]), float(p[kSoftQW])).Normalized();
+    // The binding checked every integer here fits its type.
     const auto flags = uint32_t(p[kSoftFlags]);
     settings.mUserData = user_data(desc.uid, flags, uint16_t(p[kSoftMaterial]));
-    settings.mObjectLayer = layers_.layer(uint32_t(p[kSoftGroup]), uint32_t(p[kSoftMask]), true, LayerRole::Body,
-                                          uint16_t(p[kSoftFilter]));
+    settings.mObjectLayer = layers_.acquire(uint32_t(p[kSoftGroup]), uint32_t(p[kSoftMask]), true, LayerRole::Body,
+                                            uint16_t(p[kSoftFilter]));
+    if (settings.mObjectLayer == CollisionLayers::kNoLayer) {
+        ++rejected_;
+        reserved_bodies_ -= 1;
+        return;
+    }
     settings.mNumIterations = uint32_t(p[kSoftIterations]);
     settings.mLinearDamping = float(p[kSoftLinearDamping]);
     settings.mMaxLinearVelocity = float(p[kSoftMaxVelocity]);
@@ -759,6 +902,7 @@ void WorldCore::apply(AddSoftBody &add, uint64_t index) {
     if (body == nullptr) {
         ++rejected_;
         reserved_bodies_ -= 1;
+        layers_.release(settings.mObjectLayer);
         return;
     }
     bind_row(desc.uid, body->GetID());

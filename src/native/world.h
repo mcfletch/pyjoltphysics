@@ -71,15 +71,21 @@ struct WorldSettings {
     float penetration_slop = 0.02f;       // m bodies may sink into each other before the solver separates them
 };
 
-// A callback raised; the world has stopped and keeps the exception.
+// A callback raised, or the world thread failed; the world has stopped and
+// keeps the exception.
 struct CallbackFailed : std::runtime_error {
-    CallbackFailed() : std::runtime_error("a world callback raised; the world has stopped") {}
+    explicit CallbackFailed(const std::string &message = "a world callback raised; the world has stopped")
+        : std::runtime_error(message) {}
 };
 
-// The world was stopped before what the caller waited for happened.
+// The world was stopped, or switched to free-running, before what the caller
+// waited for happened.
 struct WorldStopped : std::runtime_error {
-    WorldStopped() : std::runtime_error("the world was stopped") {}
+    explicit WorldStopped(const std::string &message = "the world was stopped") : std::runtime_error(message) {}
 };
+
+// Why `data` cannot be a state save_state wrote with this build; empty when it can be.
+std::string state_problem(const std::string &data);
 
 struct WorldStats {
     uint64_t ticks = 0;
@@ -168,8 +174,15 @@ public:
     bool wait_tick(uint64_t tick, double timeout);
     bool lockstep() const;
     bool on_world_thread() const { return std::this_thread::get_id() == thread_id_.load(); }
-    // stop() for a world dropped by Python: joins, or on the world thread
-    // itself detaches the thread, which ends after the current tick.
+    // Whether the calling thread is running this world's contact filter, on a
+    // job thread or the world thread, inside the step.
+    bool in_callback_job() const { return filtering_world == this; }
+    // Whether the calling thread is inside one of this world's callbacks: a
+    // step callback on the world thread, or the contact filter.
+    bool in_callback() const { return on_world_thread() || in_callback_job(); }
+    // stop() for a world dropped by Python: joins, or from inside one of the
+    // world's callbacks asks the thread to end after the current tick and
+    // returns; the thread then releases the world.
     void shutdown();
 
     // -- reading: any thread -------------------------------------------------
@@ -222,7 +235,12 @@ public:
     int traverse(visitproc visit, void *arg);
     nb::object error() const;
     bool failed() const { return failed_.load(); }
+    // Drops every Python object the world holds; from then on a callback's
+    // exception is logged and not kept. The caller is attached.
     void clear_python();
+    // The message of the last batch the world could not apply because applying
+    // it threw; empty when none has.
+    std::string last_rejection() const;
 
     // -- fork ----------------------------------------------------------------
     void mark_forked();
@@ -260,6 +278,15 @@ private:
     bool run_python_after(uint64_t tick);
     template <typename Body> bool call_python(Body &&body);
     void fail(nb::python_error &error);
+    // The world thread failed outside Python; the world stops with `message`.
+    void fail_native(const std::string &message);
+    // The message a call raising CallbackFailed carries.
+    std::string failure() const;
+    // Sets stopping_ and wakes every waiter; joins nothing.
+    void request_stop();
+    // In lockstep with ticks wanted, ends the wait of the run_ticks calls
+    // waiting for them; control_ is held.
+    void cut_lockstep();
     void note_applied(uint64_t seq);
     // Applies the batches due at tick `index`, logging them; whether there were any.
     bool apply_due(uint64_t index, std::vector<Batch> &due);
@@ -312,6 +339,11 @@ private:
     void apply(SetWind &set, uint64_t index);
     // Takes a ragdoll out: its pairs, rows, constraints and bodies.
     void remove_ragdoll(RagdollId id, uint64_t index);
+    // What names bodies leaving the world, for remove_bodies and remove_ragdolls alike:
+    // vehicles, soft bodies and pins, joints, drag, tracks, pairs and layer uses.
+    void leave(const std::vector<JPH::BodyID> &ids, const std::vector<Uid> &uids, uint64_t index);
+    // Takes bodies out of Jolt and destroys them.
+    void destroy(std::vector<JPH::BodyID> ids);
     // joints.cpp
     void remove_joint(Joint &joint, uint64_t index, uint16_t reason);
     void remove_joints_of(const std::vector<Uid> &uids, uint64_t index);
@@ -413,6 +445,9 @@ private:
     CallbackSet callbacks_;
     mutable std::mutex error_lock_;
     nb::object error_;
+    bool python_cleared_ = false;  // under error_lock_
+    std::string native_error_;     // under error_lock_
+    std::string last_rejection_;   // under error_lock_
     std::atomic<bool> failed_{false};
 
     WorldLock world_lock_;
@@ -440,12 +475,15 @@ private:
     bool running_ = false;
     bool idle_ = false;
     uint64_t wanted_ = 0;
+    uint64_t cuts_ = 0;  // times start() ended a lockstep wait, under control_
     std::atomic<bool> forked_{false};
 
     std::atomic<uint64_t> tick_{0};
     double time_ = 0.0;
     // Consecutive ticks that stepped a settled world, applied nothing and reported nothing.
     uint64_t quiet_ = 0;
+    // The first body publish found with a pose or velocity that is not finite.
+    Uid nonfinite_ = kNoBody;
     mutable std::mutex stats_lock_;
     WorldStats sums_;
     std::atomic<uint64_t> dropped_ticks_{0};

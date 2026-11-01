@@ -40,6 +40,7 @@ import numpy as np
 import numpy.typing as npt
 
 from pyjoltphysics import _native
+from pyjoltphysics._checks import whole_number
 from pyjoltphysics.enums import BodyFlag, ShapeKind
 from pyjoltphysics.queries import ALL_GROUPS
 from pyjoltphysics.shapes import Shape
@@ -145,6 +146,10 @@ class RagdollSettings:
     def __post_init__(self) -> None:
         if not self.bones:
             raise ValueError('a ragdoll has at least one bone')
+        self.group = whole_number(self.group, 0, 0xFFFFFFFF, 'group')
+        self.mask = whole_number(self.mask, 0, 0xFFFFFFFF, 'mask')
+        self.filter = whole_number(self.filter, 0, 0xFFFF, 'filter')
+        self.material = whole_number(self.material, 0, 0xFFFF, 'material')
         for i, bone in enumerate(self.bones):
             if (i == 0) != (bone.parent == -1) or bone.parent >= i:
                 raise ValueError(

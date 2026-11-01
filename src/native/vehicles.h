@@ -27,6 +27,7 @@
 
 #include "common.h"
 #include "events.h"
+#include "layers.h"
 
 #include <Jolt/Physics/Body/BodyFilter.h>
 #include <Jolt/Physics/Vehicle/VehicleCollisionTester.h>
@@ -169,6 +170,7 @@ struct Vehicle {
     JPH::BodyID body;
     JPH::Ref<JPH::VehicleConstraint> constraint;
     JPH::Ref<JPH::VehicleCollisionTester> tester;
+    JPH::ObjectLayer layer;  // the chassis layer the wheel caster filters by, one use of it held
     std::unique_ptr<WheelBodyFilter> filter;
     float throttle = 0, steer = 0, brake = 0, handbrake = 0;
     float steer_angle = 0;  // rad, positive left, as last handed to the controller
@@ -184,13 +186,14 @@ struct Vehicle {
 
 class VehicleSystem {
 public:
-    VehicleSystem(JPH::PhysicsSystem &system, double dt) : system_(system), dt_(float(dt)) {}
+    VehicleSystem(JPH::PhysicsSystem &system, CollisionLayers &layers, double dt)
+        : system_(system), layers_(layers), dt_(float(dt)) {}
     ~VehicleSystem();
     VehicleSystem(const VehicleSystem &) = delete;
     VehicleSystem &operator=(const VehicleSystem &) = delete;
 
     // On the world thread with the world lock held exclusively. False where
-    // the chassis is no dynamic body.
+    // the chassis is no dynamic rigid body or already carries a vehicle.
     bool add(const VehicleDesc &desc, const JPH::BodyID &chassis);
     void remove(const std::vector<VehicleId> &ids);
     // Removes the vehicles whose chassis is among `uids`, as the bodies go.
@@ -216,6 +219,7 @@ private:
     float wheel_grip(const Vehicle &vehicle, size_t wheel, const JPH::Body &ground) const;
 
     JPH::PhysicsSystem &system_;
+    CollisionLayers &layers_;
     float dt_;
     std::vector<std::unique_ptr<Vehicle>> vehicles_;  // ascending id
     std::unordered_map<Uid, Vehicle *> by_chassis_;
