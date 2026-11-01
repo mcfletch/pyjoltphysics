@@ -12,9 +12,10 @@
 - `BodyBatch.shape`, `scale`, `shape_offset`, `shape_rotation`, `center_of_mass`; builders `of_shape`, `hulls`, `meshes`, `heightfield`; `heightfield_tiles` and `heightfield_side`.
 - `BodyFlag.SMOOTH_EDGES`, Jolt's enhanced internal edge removal.
 - A sensor added or moved over sleeping bodies reports them; a kinematic sensor meets static bodies.
-- The broad phase is optimised once after a large add of static bodies.
+- The broad phase is optimised after 256 added bodies of any kind, between ticks; a world with no time between ticks optimises while applying batches, at an eighth of `max_bodies`.
 - A future `at_tick` leaves a free-running world idle.
 - `stats()`: `bodies` counts bodies in the world, `queued_bodies` those submitted and not applied; `shapes`, `broadphase_optimizations`.
+- `World.reserved_bodies`: the bodies counted against `max_bodies`, a removal until it is applied.
 - Queries on the calling thread under the world lock's shared side, GIL released: `World.raycast`, `raycast_batch`, `sweep`, `sweep_sphere`, `sweep_capsule`, `sweep_box`, `overlap`; `QueryFilter`, `RayHit`, `RayHits`, `ShapeHit`.
 - The world lock holds new queries behind the world thread when it waits, so queries from many threads cannot hold a tick off.
 - Characters: omi_physics' controller over Jolt's `CharacterVirtual`, moved on the world thread each tick: `World.add_character`, `Character`, `CharacterCapabilities`, `CharacterState`, `MoveMode`, `CharacterOp`, `character_ops`, `remove_characters`; `Snapshot.characters` (`CharacterRows`); a kinematic proxy per character that rays and sensors meet.
