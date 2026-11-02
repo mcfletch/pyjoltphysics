@@ -194,6 +194,9 @@ environment = { MACOSX_DEPLOYMENT_TARGET = "10.15" }
 
 [tool.cibuildwheel.windows]
 archs = ["native"]
+# NumPy publishes no win_arm64 wheel for 3.10, and the test environment would
+# build it from source.
+skip = "*-win32 cp310-win_arm64"
 
 # uv judges whether its cached build of a source tree is current from
 # pyproject.toml alone unless told otherwise.
