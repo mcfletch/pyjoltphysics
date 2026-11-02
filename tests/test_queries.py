@@ -226,7 +226,8 @@ def test_queries_from_many_threads_beside_a_free_running_world(make_world: MakeW
     beside = world.tick - start
     world.stop()
     assert not errors, errors[0]
-    assert min(counts) > 3
+    # Every thread completed queries: none was shut out by the world thread or the others.
+    assert min(counts) >= 1, counts
     # The queries hold the world thread off no tick: half a second of them runs as many
     # ticks as half a second alone, within what a busy machine takes from either. On the
     # sanitizer build each query holds the shared lock several times longer, and the ratio

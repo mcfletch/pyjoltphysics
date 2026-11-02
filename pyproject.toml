@@ -184,11 +184,10 @@ build-verbosity = 1
 test-extras = ["test"]
 test-command = "pytest -p no:cacheprovider -q {project}/tests -o addopts="
 
-# NumPy 2.5 publishes no cp313t wheels; the test environment would build it from
-# source (eight minutes on Windows, and a build whose argsort faults).
-[[tool.cibuildwheel.overrides]]
-select = "cp313t-*"
-test-requires = ["numpy<2.5"]
+# NumPy 2.5 publishes no cp313t wheels, and a build from source takes eight
+# minutes on Windows and faulted in argsort. pip takes the newest release
+# that has a wheel for the interpreter.
+test-environment = { PIP_ONLY_BINARY = "numpy" }
 
 [tool.cibuildwheel.linux]
 archs = ["native"]
