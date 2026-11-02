@@ -62,10 +62,14 @@ def test_the_broad_phase_is_rebuilt_once_after_a_large_static_add(make_world: Ma
     world.run_ticks(5)
     # The world thread rebuilds the trees once it has no tick due, after run_ticks returns.
     assert optimizations_reach(world, 1) == 1
-    # A few dynamic bodies later do not ask for another.
-    world.add_bodies(BodyBatch.boxes(grid(300, spacing=1.5, y0=5.0), size=(0.5, 0.5, 0.5)))
+    # Fewer than 256 bodies of any kind later do not ask for another.
+    world.add_bodies(BodyBatch.boxes(grid(100, spacing=1.5, y0=5.0), size=(0.5, 0.5, 0.5)))
     world.run_ticks(5)
-    assert world.stats()['broadphase_optimizations'] == 1
+    assert optimizations_reach(world, 1, timeout=0.5) == 1
+    # Bodies past 256 since the last rebuild ask for one, dynamic or not.
+    world.add_bodies(BodyBatch.boxes(grid(300, spacing=1.5, y0=8.0), size=(0.5, 0.5, 0.5)))
+    world.run_ticks(5)
+    assert optimizations_reach(world, 2) == 2
 
 
 def test_five_thousand_dynamic_boxes_land_on_ten_thousand_posts(make_world: MakeWorld) -> None:
