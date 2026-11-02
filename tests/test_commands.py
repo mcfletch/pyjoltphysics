@@ -4,10 +4,10 @@ from __future__ import annotations
 
 import numpy as np
 import pytest
+from test_lifecycle import run_python
 
 from pyjoltphysics import BodyBatch, BodyFlag, MotionType, ShapeKind
 from pyjoltphysics.testing import MakeWorld, floor, grid
-from test_lifecycle import run_python
 
 G = 9.81
 
