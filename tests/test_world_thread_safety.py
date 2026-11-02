@@ -289,7 +289,9 @@ def test_queued_bodies_stay_within_max_bodies_while_the_world_removes() -> None:
         while time.monotonic() < deadline:
             stats = world.stats()
             if int(stats['bodies']) + int(stats['queued_bodies']) < 1024:
-                uids, _ = world.add_bodies(BodyBatch.spheres([(i * 0.5, 0.0, 0.0) for i in range(64)]))
+                uids, _ = world.add_bodies(
+                    BodyBatch.spheres([(i * 0.5, 0.0, 0.0) for i in range(64)])
+                )
                 world.remove_bodies(uids)
             for _ in range(20):
                 most = max(most, int(world.stats()['queued_bodies']))

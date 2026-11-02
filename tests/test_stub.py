@@ -13,6 +13,7 @@ stubgen = pytest.importorskip('nanobind.stubgen', reason='nanobind is in the tes
 CHECKOUT_STUB = (
     pathlib.Path(__file__).resolve().parent.parent / 'src' / 'pyjoltphysics' / '_native.pyi'
 )
+PATTERNS = pathlib.Path(__file__).resolve().parent.parent / 'tools' / 'stub-patterns.txt'
 INSTALLED_STUB = pathlib.Path(_native.__file__).with_name('_native.pyi')
 # A wheel carries the stub beside the module; an editable install leaves it in
 # the checkout.
@@ -21,7 +22,12 @@ STUB = INSTALLED_STUB if INSTALLED_STUB.exists() else CHECKOUT_STUB
 
 def generated_stub() -> str:
     """Return the stub text nanobind writes for the imported module."""
-    generator = stubgen.StubGen(_native, quiet=True, include_docstrings=True)
+    generator = stubgen.StubGen(
+        _native,
+        quiet=True,
+        include_docstrings=True,
+        patterns=stubgen.load_pattern_file(str(PATTERNS)),
+    )
     generator.put(_native)
     return str(generator.get())
 

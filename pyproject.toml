@@ -172,12 +172,6 @@ warn_unused_ignores = true
 module = ["omi_physics", "omi_physics.*"]
 ignore_missing_imports = true
 
-# nanobind's stub generator writes World.__del__, the slot of the World's
-# finalizer (src/native/bind_world.cpp), with no annotations.
-[[tool.mypy.overrides]]
-module = ["pyjoltphysics._native"]
-disallow_untyped_defs = false
-
 [tool.cibuildwheel]
 # cibuildwheel 3.4.1, pinned in .github/workflows/test.yml: the 4.x series
 # builds no cp313t. `cp312-*` is the abi3 wheel, which cibuildwheel also

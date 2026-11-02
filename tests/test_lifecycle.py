@@ -328,11 +328,12 @@ def test_a_fork_from_a_worlds_own_callback_does_not_wait_for_it(where: str) -> N
 @pytest.mark.skipif(not LINUX, reason='reads thread stacks through glibc')
 def test_callbacks_run_on_eight_mebibyte_stacks_whatever_the_default() -> None:
     # RLIMIT_STACK sets glibc's default thread stack, as musl's 128 KiB is set
-    # for every thread there. The callbacks recurse through C code to a depth
-    # that overflows 1 MiB of stack.
+    # for every thread there. The callbacks recurse through C code as deep as
+    # the interpreter allows, which is a fixed count on 3.13 and earlier and the
+    # stack itself on 3.14.
     source = textwrap.dedent(
         """
-        import ctypes, threading
+        import ctypes, sys, threading
         from pyjoltphysics import BodyBatch, BodyFlag, World, WorldSettings
         from pyjoltphysics.testing import floor, grid
         libc = ctypes.CDLL(None)
@@ -347,11 +348,19 @@ def test_callbacks_run_on_eight_mebibyte_stacks_whatever_the_default() -> None:
             libc.pthread_attr_getstacksize(attr, ctypes.byref(size))
             libc.pthread_attr_destroy(attr)
             return size.value
+        sys.setrecursionlimit(100_000)
         def deep():
-            nested = []
-            for _ in range(20_000):
-                nested = [nested]
-            return len(repr(nested))
+            depth = 20_000
+            while True:
+                nested = []
+                for _ in range(depth):
+                    nested = [nested]
+                try:
+                    repr(nested)
+                except RecursionError:
+                    depth //= 2
+                else:
+                    return depth
         sizes = {}
         def record(where):
             thread = threading.get_native_id()
@@ -367,7 +376,7 @@ def test_callbacks_run_on_eight_mebibyte_stacks_whatever_the_default() -> None:
         world.set_contact_filter(accept, either=True)
         world.run_ticks(5)
         world.stop()
-        print(sorted({(where, size >> 20, length) for (where, _), (size, length) in sizes.items()}), flush=True)
+        print(sorted({(where, size >> 20, depth >= 1000) for (where, _), (size, depth) in sizes.items()}), flush=True)
         """
     )
 
@@ -386,4 +395,4 @@ def test_callbacks_run_on_eight_mebibyte_stacks_whatever_the_default() -> None:
         preexec_fn=small_stack,
     )
     assert result.returncode == 0, result.stderr
-    assert result.stdout.strip() == "[('filter', 8, 40002), ('world', 8, 40002)]"
+    assert result.stdout.strip() == "[('filter', 8, True), ('world', 8, True)]"

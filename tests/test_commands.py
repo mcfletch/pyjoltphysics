@@ -241,7 +241,9 @@ def test_reserved_bodies_count_a_removal_until_it_is_applied(make_world: MakeWor
 
 
 @pytest.mark.parametrize('motion', [MotionType.DYNAMIC, MotionType.KINEMATIC, MotionType.STATIC])
-def test_bodies_added_and_removed_every_tick_stay_within_the_broad_phase(motion: MotionType) -> None:
+def test_bodies_added_and_removed_every_tick_stay_within_the_broad_phase(
+    motion: MotionType,
+) -> None:
     """Bodies added and removed before each step leave a layer empty; its tree is rebuilt anyway."""
     result = run_python(
         f"""

@@ -156,11 +156,12 @@ pip install -e '.[dev]'
 module and committed. After a change to the module's signatures:
 
 ```
-python -m nanobind.stubgen -m pyjoltphysics._native -o src/pyjoltphysics/_native.pyi
+python -m nanobind.stubgen -p tools/stub-patterns.txt -m pyjoltphysics._native -o src/pyjoltphysics/_native.pyi
 ```
 
 `tests/test_stub.py` and the CI `stubs` job fail when the committed stub and
-the generated one differ.
+the generated one differ. `tools/stub-patterns.txt` leaves out `World.__del__`,
+which nanobind writes differently on Python 3.12 and earlier than on 3.13 and later.
 
 ## Tests
 

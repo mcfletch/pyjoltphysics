@@ -1,0 +1,6 @@
+# nanobind.stubgen pattern file for src/pyjoltphysics/_native.pyi.
+#
+# Python 3.13 and later expose a type's tp_finalize slot as __del__, and
+# nanobind writes a different signature for it than on 3.12 and earlier. The
+# finalizer is not part of the module's interface, so the stub omits it.
+pyjoltphysics\._native\.World\.__del__:
