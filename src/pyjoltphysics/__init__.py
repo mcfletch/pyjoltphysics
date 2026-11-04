@@ -92,7 +92,7 @@ from pyjoltphysics.world import (
     WorldStopped,
 )
 
-__version__ = '0.1.0a2'
+__version__ = '0.1.0a3'
 
 
 @dataclasses.dataclass(frozen=True)
