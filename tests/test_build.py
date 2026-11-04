@@ -6,6 +6,7 @@ import dataclasses
 import os
 import pathlib
 import platform
+import re
 import subprocess
 import sys
 import sysconfig
@@ -21,8 +22,12 @@ FREE_THREADED_PYTHON = bool(sysconfig.get_config_var('Py_GIL_DISABLED'))
 CHECKOUT = pathlib.Path(__file__).resolve().parent.parent
 
 
-def test_the_package_names_its_version() -> None:
-    assert pyjoltphysics.__version__ == '0.1.0a1'
+def test_the_package_version_is_a_pep_440_release() -> None:
+    # release.yml reads this string to decide whether to publish, and the build
+    # takes the distribution's version from it.
+    assert re.fullmatch(
+        r'\d+(\.\d+)*((a|b|rc)\d+)?(\.post\d+)?(\.dev\d+)?', pyjoltphysics.__version__
+    )
 
 
 def test_jolt_version_is_the_vendored_tag() -> None:
